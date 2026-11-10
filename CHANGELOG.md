@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- **Graphical window** (`blob.ps1`): a category sidebar and a checkbox per tweak, where a ticked box means the tweak is applied now. Tick/untick and "Apply changes" (per category, with a confirmation); "Select recommended" and "Create restore point" buttons; a Debloat tab that ticks apps to remove. Its own dark design, built with WPF.
+- Falls back to the text menu if the window can't open, or with `-Console`.
+
 ## 0.3.0
 
 - **Blob Optimizers now runs as a single readable PowerShell script** (`blob.ps1`), run with `irm .../blob.ps1 | iex` — nothing compiled or installed. This is the recommended way to run it; the earlier Tauri desktop app stays in the repo and in the 0.1-0.2 releases.

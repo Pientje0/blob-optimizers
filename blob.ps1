@@ -15,12 +15,14 @@
 param(
     # Testing / automation helpers (end users don't need these):
     [switch]$List,                 # Print the catalogue and exit (no admin, no changes)
-    [switch]$NonInteractive,       # Don't show the menu or self-elevate
+    [switch]$NonInteractive,       # Load functions/data only; don't show UI or self-elevate
+    [switch]$Console,              # Force the text menu instead of the window
+    [switch]$SelfTest,             # Build the window without showing it, report, and exit
     [string]$BlobUrl = 'https://raw.githubusercontent.com/Pientje09-abe/blob-optimizers/main/blob.ps1'
 )
 
 $ErrorActionPreference = 'Stop'
-$script:Version = '0.3.0'
+$script:Version = '0.4.0'
 
 # ------------------------------------------------------------------ helpers ---
 
@@ -383,6 +385,228 @@ function Show-Menu {
 
 # --------------------------------------------------------------------- main ---
 
+# ----------------------------------------------------------------- window ---
+# A graphical window (WPF): category sidebar on the left, one check-box per tweak on the right.
+# A ticked box = the tweak is applied right now. Tick/untick then "Apply changes" to make it so.
+
+$script:Categories = @('Performance', 'Latency', 'Gaming', 'Privacy', 'Interface', 'Debloat')
+
+function New-BlobWindow {
+    Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+
+    $xaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Blob Optimizers" Height="720" Width="1040" WindowStartupLocation="CenterScreen"
+        Background="#0b0b10" FontFamily="Segoe UI" TextOptions.TextFormattingMode="Display">
+  <Window.Resources>
+    <Style TargetType="Button">
+      <Setter Property="Background" Value="#1a1a24"/>
+      <Setter Property="Foreground" Value="#e8e8ef"/>
+      <Setter Property="BorderBrush" Value="#2a2a38"/>
+      <Setter Property="Padding" Value="14,7"/>
+      <Setter Property="Margin" Value="6,0,0,0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="Accent" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="#7c5cff"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style x:Key="Nav" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Foreground" Value="#9a9aab"/>
+      <Setter Property="Margin" Value="8,2"/>
+      <Setter Property="Padding" Value="12,9"/>
+      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+    </Style>
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="#e8e8ef"/>
+      <Setter Property="Margin" Value="0,7"/>
+      <Setter Property="FontSize" Value="13"/>
+    </Style>
+  </Window.Resources>
+  <Grid>
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Border Grid.Row="0" Background="#111119" Padding="18,14">
+      <StackPanel Orientation="Horizontal">
+        <TextBlock Text="BLOB OPTIMIZERS" Foreground="#b48cff" FontSize="17" FontWeight="Bold"/>
+        <TextBlock x:Name="Sub" Foreground="#6b6b7b" FontSize="12" VerticalAlignment="Bottom" Margin="10,0,0,2"/>
+      </StackPanel>
+    </Border>
+    <Grid Grid.Row="1">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="196"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Border Grid.Column="0" Background="#0e0e16"><StackPanel x:Name="Nav" Margin="0,10"/></Border>
+      <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="22,16">
+        <StackPanel x:Name="Body"/>
+      </ScrollViewer>
+    </Grid>
+    <Border Grid.Row="2" Background="#111119" Padding="14">
+      <Grid>
+        <TextBlock x:Name="Status" Foreground="#6b6b7b" FontSize="12" VerticalAlignment="Center"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button x:Name="BtnRecommended" Content="Select recommended"/>
+          <Button x:Name="BtnRestore" Content="Create restore point"/>
+          <Button x:Name="BtnApply" Content="Apply changes" Style="{StaticResource Accent}"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>
+"@
+
+    $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$xaml)))
+    $find = { param($n) $win.FindName($n) }
+    $nav = & $find 'Nav'; $body = & $find 'Body'
+    (& $find 'Sub').Text = "Windows optimization  .  v$script:Version"
+
+    # Per-category content panels (built once, shown one at a time) and their check boxes.
+    $panels = @{}
+    $script:GuiBoxes = @{}   # tweak Id  -> CheckBox
+    $script:GuiDebloat = @{} # appx Id   -> CheckBox
+
+    foreach ($cat in $script:Categories) {
+        $panel = New-Object Windows.Controls.StackPanel
+        $panel.Visibility = 'Collapsed'
+        $intro = New-Object Windows.Controls.TextBlock
+        $intro.Foreground = '#8a8a9a'; $intro.FontSize = 12; $intro.Margin = '0,0,0,10'; $intro.TextWrapping = 'Wrap'
+        $intro.Text = if ($cat -eq 'Debloat') {
+            'Tick the apps you want to remove, then Apply changes. Only safe, user-facing Store apps are listed.'
+        } else {
+            'A ticked box means the tweak is applied now. Tick or untick, then Apply changes. Everything is reversible.'
+        }
+        [void]$panel.Children.Add($intro)
+
+        if ($cat -eq 'Debloat') {
+            foreach ($id in ($script:DebloatList | Sort-Object)) {
+                if (-not (Get-AppxPackage -Name $id -ErrorAction SilentlyContinue)) { continue }
+                $cb = New-Object Windows.Controls.CheckBox
+                $cb.Content = ($id -replace '^Microsoft\.', ''); $cb.Tag = $id
+                $script:GuiDebloat[$id] = $cb
+                [void]$panel.Children.Add($cb)
+            }
+            if ($panel.Children.Count -eq 1) {
+                $none = New-Object Windows.Controls.TextBlock
+                $none.Text = 'None of the removable apps are installed.'; $none.Foreground = '#5bd38a'
+                [void]$panel.Children.Add($none)
+            }
+        } else {
+            foreach ($t in $script:Tweaks | Where-Object Cat -eq $cat) {
+                $cb = New-Object Windows.Controls.CheckBox
+                $cb.Tag = $t
+                $cb.IsChecked = [bool](Test-Applied $t)
+                $head = if ($t.Rec) { "$($t.Name)   (recommended)" } else { $t.Name }
+                $sp = New-Object Windows.Controls.StackPanel
+                $tb = New-Object Windows.Controls.TextBlock; $tb.Text = $head; $tb.Foreground = '#e8e8ef'
+                $db = New-Object Windows.Controls.TextBlock
+                $db.Text = $t.Desc; $db.Foreground = '#7a7a8a'; $db.FontSize = 11.5; $db.TextWrapping = 'Wrap'
+                [void]$sp.Children.Add($tb); [void]$sp.Children.Add($db)
+                if ($t.Caveat) {
+                    $cv = New-Object Windows.Controls.TextBlock
+                    $cv.Text = "Note: $($t.Caveat)"; $cv.Foreground = '#d9a441'; $cv.FontSize = 11; $cv.TextWrapping = 'Wrap'
+                    [void]$sp.Children.Add($cv)
+                }
+                $cb.Content = $sp
+                $script:GuiBoxes[$t.Id] = $cb
+                [void]$panel.Children.Add($cb)
+            }
+        }
+        $panels[$cat] = $panel
+        [void]$body.Children.Add($panel)
+    }
+
+    # Sidebar navigation: show one category panel at a time.
+    $script:GuiCurrent = $script:Categories[0]
+    $show = {
+        param($cat)
+        $script:GuiCurrent = $cat
+        foreach ($k in $panels.Keys) { $panels[$k].Visibility = if ($k -eq $cat) { 'Visible' } else { 'Collapsed' } }
+    }
+    foreach ($cat in $script:Categories) {
+        $b = New-Object Windows.Controls.Button
+        $b.Content = $cat; $b.Style = $win.FindResource('Nav'); $b.Tag = $cat
+        $b.Add_Click({ & $show $this.Tag }.GetNewClosure())
+        [void]$nav.Children.Add($b)
+    }
+    & $show $script:GuiCurrent
+
+    [pscustomobject]@{
+        Window      = $win
+        Status      = (& $find 'Status')
+        BtnApply    = (& $find 'BtnApply')
+        BtnRec      = (& $find 'BtnRecommended')
+        BtnRestore  = (& $find 'BtnRestore')
+    }
+}
+
+function Show-Gui {
+    $ui = New-BlobWindow
+
+    $ui.BtnRec.Add_Click({
+        if ($script:GuiCurrent -eq 'Debloat') { return }
+        foreach ($t in $script:Tweaks | Where-Object Cat -eq $script:GuiCurrent) {
+            if ($t.Rec) { $script:GuiBoxes[$t.Id].IsChecked = $true }
+        }
+    })
+
+    $ui.BtnRestore.Add_Click({
+        $ui.Status.Text = 'Creating restore point...'
+        try {
+            Enable-ComputerRestore -Drive "$env:SystemDrive\" -ErrorAction SilentlyContinue
+            Checkpoint-Computer -Description 'Before Blob Optimizers' -RestorePointType 'MODIFY_SETTINGS'
+            $ui.Status.Text = 'Restore point created.'
+        } catch {
+            $ui.Status.Text = 'Could not create a restore point (System Protection may be off).'
+        }
+    })
+
+    $ui.BtnApply.Add_Click({
+        $cat = $script:GuiCurrent
+        if ($cat -eq 'Debloat') {
+            $remove = $script:GuiDebloat.Values | Where-Object { $_.IsChecked }
+            if (-not $remove) { $ui.Status.Text = 'Nothing ticked to remove.'; return }
+            if ([Windows.MessageBox]::Show("Remove $($remove.Count) app(s)? This can't be undone from here (reinstall from the Store).",
+                    'Confirm', 'YesNo', 'Warning') -ne 'Yes') { return }
+            $done = 0
+            foreach ($cb in $remove) {
+                try { Get-AppxPackage -Name $cb.Tag -EA SilentlyContinue | Remove-AppxPackage -EA Stop; $cb.IsEnabled = $false; $cb.IsChecked = $false; $done++ } catch {}
+            }
+            $ui.Status.Text = "Removed $done app(s)."
+            return
+        }
+        $toApply = @(); $toRevert = @()
+        foreach ($t in $script:Tweaks | Where-Object Cat -eq $cat) {
+            $want = [bool]$script:GuiBoxes[$t.Id].IsChecked
+            $now = [bool](Test-Applied $t)
+            if ($want -and -not $now) { $toApply += $t } elseif (-not $want -and $now) { $toRevert += $t }
+        }
+        if (-not $toApply -and -not $toRevert) { $ui.Status.Text = 'No changes in this section.'; return }
+        if ([Windows.MessageBox]::Show("Apply $($toApply.Count) and revert $($toRevert.Count) tweak(s) in $cat?",
+                'Confirm', 'YesNo', 'Question') -ne 'Yes') { return }
+        foreach ($t in $toApply) { try { Set-Tweak $t } catch {} }
+        foreach ($t in $toRevert) { try { Set-Tweak $t -Revert } catch {} }
+        foreach ($t in $script:Tweaks | Where-Object Cat -eq $cat) { $script:GuiBoxes[$t.Id].IsChecked = [bool](Test-Applied $t) }
+        $ui.Status.Text = "Applied $($toApply.Count), reverted $($toRevert.Count). Some changes need a sign-out or restart."
+    })
+
+    if ($SelfTest) {
+        Write-Host "GUI built: $($script:GuiBoxes.Count) tweak boxes, $($script:GuiDebloat.Count) debloat boxes." -ForegroundColor Green
+        $ui.Window.Close()
+        return
+    }
+    [void]$ui.Window.ShowDialog()
+}
+
+# --------------------------------------------------------------------- main ---
+
 if ($List) {
     $script:Tweaks | Sort-Object Cat | Format-Table @{ n = 'Category'; e = 'Cat' }, @{ n = 'Recommended'; e = { if ($_.Rec) { 'yes' } else { '' } } }, Name -AutoSize
     Write-Host "Total: $($script:Tweaks.Count) tweaks, $($script:DebloatList.Count) debloat targets." -ForegroundColor Cyan
@@ -391,7 +615,8 @@ if ($List) {
 
 if ($NonInteractive) { return }
 
-if (-not (Test-Admin)) {
+# Elevate first (unless we're only building the window for a self-test).
+if (-not $SelfTest -and -not (Test-Admin)) {
     Write-Host 'Blob Optimizers needs administrator rights. Approve the Windows prompt...' -ForegroundColor Yellow
     try {
         Start-Process powershell.exe -Verb RunAs -ArgumentList @(
@@ -402,6 +627,18 @@ if (-not (Test-Admin)) {
     return
 }
 
-Show-Menu
-Write-Host ''
-Write-Host '  Done. Some changes take effect after you sign out or restart.' -ForegroundColor Cyan
+# Prefer the window; fall back to the text menu if WPF can't load or -Console was passed.
+if ($Console) {
+    Show-Menu
+} else {
+    try {
+        Show-Gui
+    } catch {
+        Write-Host "Could not open the window ($($_.Exception.Message)). Falling back to the text menu." -ForegroundColor Yellow
+        Show-Menu
+    }
+}
+if (-not $SelfTest) {
+    Write-Host ''
+    Write-Host '  Done. Some changes take effect after you sign out or restart.' -ForegroundColor Cyan
+}

@@ -10,7 +10,7 @@ Blob Optimizers now runs as a single, readable PowerShell script — nothing is 
 irm https://raw.githubusercontent.com/Pientje09-abe/blob-optimizers/main/blob.ps1 | iex
 ```
 
-It asks for administrator rights, then shows a menu: Performance, Latency, Gaming, Privacy and Interface tweaks, a Debloat list, power plans and a one-click restore point. Applied tweaks show `[x]`; pick one again to put the Windows default back. Every change is plain registry/service edits you can read in [`blob.ps1`](blob.ps1); it never touches Microsoft Defender, the firewall or Windows Update.
+It asks for administrator rights, then opens a **window**: a category sidebar (Performance, Latency, Gaming, Privacy, Interface, Debloat) with a checkbox per tweak. A ticked box means the tweak is applied now — tick or untick, then **Apply changes**. There are **Select recommended** and **Create restore point** buttons. (On a PC where the window can't open it falls back to a text menu; `-Console` forces it.) Every change is plain registry/service edits you can read in [`blob.ps1`](blob.ps1); it never touches Microsoft Defender, the firewall or Windows Update.
 
 > Why a script? It's open text an antivirus (and you) can read line by line, like other Windows tweak scripts — unlike an unknown compiled `.exe`, which new tools get wrongly flagged for until they're signed and widely downloaded.
 
