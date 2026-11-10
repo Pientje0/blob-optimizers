@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --c-base: 9 9 13;
+  --c-surface: 17 17 23;
+  --c-raised: 25 25 33;
+  --c-line: 38 38 48;
+  --c-fg: 236 236 244;
+  --c-muted: 140 140 158;
+  --c-accent: 124 92 255;
+  --c-accent2: 56 152 255;
+  --c-good: 52 211 153;
+  --c-warn: 251 191 36;
+  --c-bad: 248 113 113;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --c-base: 241 242 247;
+  --c-surface: 255 255 255;
+  --c-raised: 234 236 243;
+  --c-line: 214 217 228;
+  --c-fg: 22 22 32;
+  --c-muted: 96 98 116;
+  --c-good: 5 150 105;
+  --c-warn: 202 138 4;
+  --c-bad: 220 38 38;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-base text-fg font-sans antialiased;
+  font-size: 14px;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Allow selecting text where it is useful (values, logs). */
+.selectable {
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--c-line));
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--c-muted) / 0.5);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line/70 bg-surface;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white shadow-[0_0_0_1px_rgb(255_255_255/0.08)_inset] hover:brightness-110 active:brightness-95;
+  }
+  .btn-ghost {
+    @apply btn border border-line bg-raised/60 text-fg hover:bg-raised hover:border-muted/30;
+  }
+  .label {
+    @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-muted;
+  }
+}
+
+.glow-accent {
+  background: radial-gradient(600px circle at 0% 0%, rgb(var(--c-accent) / 0.12), transparent 45%),
+    radial-gradient(500px circle at 100% 0%, rgb(var(--c-accent2) / 0.08), transparent 40%);
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
