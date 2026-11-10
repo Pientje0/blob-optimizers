@@ -1,4 +1,4 @@
-import { RefreshCw, RotateCw, XCircle } from "lucide-react";
+import { Gamepad2, Gauge, LayoutList, Monitor, Network, RefreshCw, RotateCw, Shield, Timer, Wrench, XCircle, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CleanupCard } from "../components/tweaks/CleanupCard";
 import { PageFileCard } from "../components/tweaks/PageFileCard";
@@ -6,22 +6,35 @@ import { PowerCard } from "../components/tweaks/PowerCard";
 import { ServicesCard } from "../components/tweaks/ServicesCard";
 import { TweakPanel } from "../components/tweaks/TweakPanel";
 import { Skeleton } from "../components/ui/Card";
-import { Tabs } from "../components/ui/Controls";
+import { SubTabs } from "../components/ui/SubTabs";
 import { useEngine } from "../context/EngineContext";
 import { useToast } from "../context/ToastContext";
 import { api, errorMessage, type SystemInfo, type TweakCategory, type TweakInfo } from "../lib/api";
 
-const TABS: { id: TweakCategory; label: string }[] = [
-  { id: "performance", label: "Performance" },
-  { id: "privacy", label: "Privacy" },
-  { id: "windows", label: "Windows" },
-  { id: "system", label: "System" },
+type Tab = TweakCategory | "latency" | "all";
+
+const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
+  { id: "performance", label: "Performance", icon: Gauge },
+  { id: "latency", label: "Latency", icon: Timer },
+  { id: "gaming", label: "Gaming", icon: Gamepad2 },
+  { id: "network", label: "Network", icon: Network },
+  { id: "privacy", label: "Privacy", icon: Shield },
+  { id: "windows", label: "Windows", icon: Monitor },
+  { id: "system", label: "System", icon: Wrench },
+  { id: "all", label: "All tweaks", icon: LayoutList },
 ];
+
+const inTabFilter = (tab: Tab) => (t: TweakInfo) => (tab === "all" ? true : tab === "latency" ? t.latency : t.category === tab);
+let lastTab: Tab = "performance";
 
 export function Tweaks() {
   const { runOperation, waitFor } = useEngine();
   const toast = useToast();
-  const [tab, setTab] = useState<TweakCategory>("performance");
+  const [tab, setTabState] = useState<Tab>(lastTab);
+  const setTab = (t: Tab) => {
+    lastTab = t;
+    setTabState(t);
+  };
   const [tweaks, setTweaks] = useState<TweakInfo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsExplorer, setNeedsExplorer] = useState(false);
@@ -55,7 +68,7 @@ export function Tweaks() {
     if (tab === "system" && !sys) reloadSys();
   }, [tab, sys, reloadSys]);
 
-  const inTab = useMemo(() => tweaks?.filter((t) => t.category === tab) ?? null, [tweaks, tab]);
+  const inTab = useMemo(() => tweaks?.filter(inTabFilter(tab)) ?? null, [tweaks, tab]);
 
   const restartExplorer = async () => {
     setRestarting(true);
@@ -75,11 +88,7 @@ export function Tweaks() {
 
   return (
     <div className="space-y-5">
-      <Tabs<TweakCategory>
-        value={tab}
-        onChange={setTab}
-        tabs={TABS.map((t) => ({ ...t, count: tweaks?.filter((x) => x.category === t.id).length }))}
-      />
+      <SubTabs<Tab> value={tab} onChange={setTab} tabs={TABS.map((t) => ({ ...t, count: tweaks?.filter(inTabFilter(t.id)).length }))} />
 
       {needsExplorer && (
         <div className="flex items-center gap-3 rounded-xl border border-accent/30 bg-accent/10 px-4 py-3 text-[13px]">
@@ -108,7 +117,7 @@ export function Tweaks() {
         </>
       )}
 
-      <TweakPanel tweaks={inTab} reload={reload} onExplorerChange={() => setNeedsExplorer(true)} />
+      <TweakPanel key={tab} tweaks={inTab} reload={reload} onExplorerChange={() => setNeedsExplorer(true)} />
     </div>
   );
 }

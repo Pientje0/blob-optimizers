@@ -37,11 +37,11 @@ export function TweakRow({ tweak: t, busy, disabled, onChange }: Props) {
   const state = stateLabel(t);
 
   return (
-    <div className="px-5 py-4">
-      <div className="flex items-start gap-4">
+    <div className="px-4 py-3">
+      <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{t.title}</span>
+            <span className="text-[13.5px] font-medium">{t.title}</span>
             <Badge tone={RECOMMEND[t.recommend].tone}>{RECOMMEND[t.recommend].label}</Badge>
             {t.requiresAdmin && (
               <Badge tone="accent">
@@ -50,13 +50,13 @@ export function TweakRow({ tweak: t, busy, disabled, onChange }: Props) {
             )}
             {after && <Badge>{after}</Badge>}
           </div>
-          <p className="mt-1 text-[13px] leading-relaxed text-muted">{t.description}</p>
+          <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted">{t.description}</p>
           {t.caveat && (
-            <p className="mt-1.5 flex gap-1.5 text-xs leading-relaxed text-warn/90">
+            <p className="mt-1 flex gap-1.5 text-[11.5px] leading-relaxed text-warn/90">
               <AlertTriangle size={13} className="mt-px shrink-0" /> {t.caveat}
             </p>
           )}
-          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
             <span className={state.cls} title={t.state === "custom" ? "Set to something else, for example in Windows Settings or by a policy." : undefined}>
               Current: {state.label}
             </span>

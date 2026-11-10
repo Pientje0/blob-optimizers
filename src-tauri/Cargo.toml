@@ -1,6 +1,6 @@
 [package]
 name = "blob-optimizers"
-version = "0.1.0"
+version = "0.2.0"
 description = "Blob Optimizers - Windows PC & gaming optimization suite"
 authors = ["Blob Optimizers"]
 edition = "2021"

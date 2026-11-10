@@ -1,9 +1,97 @@
 //! Declarative tweak model. A tweak is two lists of operations: `on` (the tweak applied) and `off`
 //! (the Windows default). State is detected by checking which list currently matches.
 
-use serde::Serialize;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
+
+use crate::util::powershell;
 use crate::util::registry::{self, Hive, RegData};
+
+/// A setting that is not a plain registry value (network adapter properties, power plan values, …).
+/// `check` is reviewed PowerShell that returns `$true`/`$false` (or `$null` when the setting does not
+/// exist on this PC, which hides the tweak); `apply` makes it true and must fail with an exception.
+/// Checks run together in one PowerShell process after `CHECK_PRELUDE`, so they can use its helpers.
+#[derive(Debug)]
+pub struct Cmd {
+    pub key: &'static str,
+    pub check: &'static str,
+    pub apply: &'static str,
+    pub describe: &'static str,
+    pub admin: bool,
+}
+
+/// Shared, read-only helpers for all checks (computed once per refresh).
+const CHECK_PRELUDE: &str = r#"
+$__nics = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object Status -ne 'Disabled')
+$__adv = if ($__nics.Count) { @(Get-NetAdapterAdvancedProperty -Name $__nics.Name -RegistryKeyword '*EEE', '*InterruptModeration', '*FlowControl' -ErrorAction SilentlyContinue) } else { @() }
+$__ifs = @(Get-ChildItem 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces' -ErrorAction SilentlyContinue | Where-Object {
+  $p = Get-ItemProperty $_.PSPath
+  ($p.DhcpIPAddress -and $p.DhcpIPAddress -ne '0.0.0.0') -or (@($p.IPAddress) | Where-Object { $_ -and $_ -ne '0.0.0.0' })
+})
+function __adv($k, $v) {
+  $p = @($__adv | Where-Object { $_.RegistryKeyword -eq $k })
+  if (-not $p.Count) { return $null }
+  -not ($p | Where-Object { "$($_.RegistryValue)" -ne $v })
+}
+function __pw($sub, $set, $want) {
+  $o = powercfg /q SCHEME_CURRENT $sub $set 2>$null | Out-String
+  if ($LASTEXITCODE -ne 0) { return $null }
+  $h = @([regex]::Matches($o, '0x[0-9a-fA-F]{8}') | ForEach-Object Value)
+  if ($h.Count -lt 2) { return $null }
+  ([Convert]::ToInt32($h[-2], 16) -eq $want) -and ([Convert]::ToInt32($h[-1], 16) -eq $want)
+}
+"#;
+
+/// Results of the last check run: key → Some(matches) or None (not available on this PC).
+struct CmdCache {
+    at: Instant,
+    values: HashMap<String, Option<bool>>,
+}
+
+static CMD_CACHE: Mutex<Option<CmdCache>> = Mutex::new(None);
+/// Changes made here clear the cache; this only bounds how long changes made elsewhere go unnoticed.
+const CMD_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// Forgets cached check results (after a change), so the next listing reads them again.
+pub fn invalidate_cmd_cache() {
+    if let Ok(mut c) = CMD_CACHE.lock() {
+        *c = None;
+    }
+}
+
+/// Runs every command check in one hidden PowerShell process if the cache is missing or stale.
+pub fn refresh_cmd_states(cmds: &[&'static Cmd]) {
+    if cmds.is_empty() {
+        return;
+    }
+    // One refresh at a time: a caller arriving during a refresh waits for it and then uses its result.
+    static REFRESHING: Mutex<()> = Mutex::new(());
+    let _running = REFRESHING.lock();
+    if CMD_CACHE.lock().ok().and_then(|c| c.as_ref().map(|c| c.at.elapsed() < CMD_TTL)).unwrap_or(false) {
+        return;
+    }
+    let mut script = String::from("$ErrorActionPreference = 'SilentlyContinue'\n");
+    script.push_str(CHECK_PRELUDE);
+    script.push_str("$__r = [ordered]@{}\n");
+    for c in cmds {
+        script.push_str(&format!(
+            "try {{ $__v = & {{ {} }}; $__r['{}'] = if ($null -eq $__v) {{ $null }} else {{ [bool]$__v }} }} catch {{ $__r['{}'] = $null }}\n",
+            c.check, c.key, c.key
+        ));
+    }
+    script.push_str("$__r | ConvertTo-Json -Compress\n");
+    let values: HashMap<String, Option<bool>> = powershell::run_json(&script, Duration::from_secs(45)).unwrap_or_default();
+    if let Ok(mut c) = CMD_CACHE.lock() {
+        *c = Some(CmdCache { at: Instant::now(), values });
+    }
+}
+
+fn cmd_state(key: &str) -> Option<bool> {
+    CMD_CACHE.lock().ok().and_then(|c| c.as_ref().and_then(|c| c.values.get(key).copied().flatten()))
+}
 
 #[derive(Debug, Clone, Copy)]
 pub enum V {
@@ -65,6 +153,8 @@ pub enum Op {
     DelKey(Hive, &'static str),
     /// Service start type.
     Svc(&'static str, StartType),
+    /// Reviewed PowerShell check/apply pair.
+    Cmd(&'static Cmd),
 }
 
 impl Op {
@@ -72,6 +162,7 @@ impl Op {
         match self {
             Op::Set(h, ..) | Op::Opt(h, ..) | Op::Del(h, ..) | Op::DelKey(h, ..) => *h == Hive::LocalMachine,
             Op::Svc(..) => true,
+            Op::Cmd(c) => c.admin,
         }
     }
 
@@ -82,6 +173,7 @@ impl Op {
             Op::Del(h, p, n) => registry::read(h, p, n).is_none(),
             Op::DelKey(h, p) => !registry::key_exists(h, p),
             Op::Svc(name, start) => service_start(name) == Some(start),
+            Op::Cmd(c) => cmd_state(c.key) == Some(true),
         }
     }
 
@@ -92,6 +184,7 @@ impl Op {
             Op::Del(h, p, n) => registry::ps_delete_value(h, p, n),
             Op::DelKey(h, p) => registry::ps_delete_key(h, p),
             Op::Svc(name, start) => service_script(name, start),
+            Op::Cmd(c) => format!("{}\n", c.apply),
         }
     }
 
@@ -101,6 +194,7 @@ impl Op {
             Op::Del(h, p, n) => format!("{}\\{p} › {n} removed", h.reg()),
             Op::DelKey(h, p) => format!("{}\\{p} removed", h.reg()),
             Op::Svc(name, start) => format!("Service {name} › {}", start.ps()),
+            Op::Cmd(c) => c.describe.to_string(),
         }
     }
 }
@@ -148,6 +242,8 @@ pub enum Category {
     System,
     /// Shown on the Gaming page instead of Windows Tweaks.
     Gaming,
+    /// Shown on the Network page.
+    Network,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -187,9 +283,11 @@ pub struct Tweak {
     pub min_build: u32,
     /// Windows' own default is the `on` list (e.g. Game Mode). Normally the default is `off`.
     pub default_on: bool,
+    /// Also listed in the Latency sections (Gaming and Network pages).
+    pub latency: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum State {
     /// The `on` list matches.
@@ -201,6 +299,18 @@ pub enum State {
 }
 
 impl Tweak {
+    pub fn cmds(&self) -> impl Iterator<Item = &'static Cmd> + '_ {
+        self.on.iter().chain(self.off).filter_map(|op| match op {
+            Op::Cmd(c) => Some(*c),
+            _ => None,
+        })
+    }
+
+    /// False when a command-backed setting does not exist on this PC (e.g. no adapter supports it).
+    pub fn available(&self) -> bool {
+        self.cmds().all(|c| cmd_state(c.key).is_some())
+    }
+
     pub fn needs_admin(&self) -> bool {
         self.on.iter().chain(self.off).any(Op::needs_admin)
     }

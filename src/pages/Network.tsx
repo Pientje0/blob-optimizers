@@ -8,20 +8,25 @@ import {
   Loader2,
   Power,
   RefreshCw,
+  LayoutGrid,
   Stethoscope,
+  Timer,
   Wifi,
   Wrench,
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { NetworkChart } from "../components/charts/NetworkChart";
+import { LatencyPanel } from "../components/tweaks/LatencyPanel";
+import { TweakPanel } from "../components/tweaks/TweakPanel";
+import { SubTabs } from "../components/ui/SubTabs";
 import { Badge, Card, InfoRow, Skeleton } from "../components/ui/Card";
 import { Modal } from "../components/ui/Modal";
 import { OperationButton } from "../components/ui/OperationButton";
 import { useSystem } from "../context/SystemContext";
 import { useToast } from "../context/ToastContext";
 import { useJob } from "../hooks/useJob";
-import { api, errorMessage, type DnsBench, type NetAdapter, type NetCheck } from "../lib/api";
+import { api, errorMessage, type DnsBench, type NetAdapter, type NetCheck, type TweakInfo } from "../lib/api";
 import { formatBytes, formatRate } from "../lib/format";
 
 const IP_RE = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$|^[0-9a-fA-F:]{2,39}$/;
@@ -102,8 +107,38 @@ function DnsDialog({ adapter, presets, initial, onClose, onDone }: { adapter: Ne
   );
 }
 
+/** Network settings that aren't about latency (name resolution etc.). */
+function OtherNetworkTweaks() {
+  const [tweaks, setTweaks] = useState<TweakInfo[] | null>(null);
+  const reload = useCallback(async () => {
+    try {
+      setTweaks((await api.tweaks()).filter((t) => t.category === "network" && !t.latency));
+    } catch {
+      setTweaks([]);
+    }
+  }, []);
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  if (tweaks && !tweaks.length) return null;
+  return (
+    <section className="space-y-3">
+      <h2 className="text-[15px] font-semibold">More network settings</h2>
+      <TweakPanel tweaks={tweaks} reload={reload} onExplorerChange={() => undefined} bare />
+    </section>
+  );
+}
+
+type Tab = "overview" | "latency" | "tools";
+let lastTab: Tab = "overview";
+
 export function Network() {
   const { live, history } = useSystem();
+  const [tab, setTabState] = useState<Tab>(lastTab);
+  const setTab = (t: Tab) => {
+    lastTab = t;
+    setTabState(t);
+  };
   const toast = useToast();
   const { run, busy } = useJob();
   const [adapters, setAdapters] = useState<NetAdapter[] | null>(null);
@@ -166,6 +201,25 @@ export function Network() {
 
   return (
     <div className="space-y-5">
+      <SubTabs<Tab>
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { id: "overview", label: "Adapters", icon: LayoutGrid },
+          { id: "latency", label: "Latency & tweaks", icon: Timer },
+          { id: "tools", label: "Diagnostics, DNS test & repair", icon: Stethoscope },
+        ]}
+      />
+
+      {tab === "latency" && (
+        <>
+          <LatencyPanel focus="network" />
+          <OtherNetworkTweaks />
+        </>
+      )}
+
+      {tab === "overview" && (
+        <>
       <Card
         title="Network activity"
         icon={Gauge}
@@ -244,6 +298,11 @@ export function Network() {
             })}
       </div>
 
+        </>
+      )}
+
+      {tab === "tools" && (
+        <>
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
         <Card
           title="Diagnostics"
@@ -336,6 +395,9 @@ export function Network() {
           <OperationButton op="diag.ipconfig">Show full configuration</OperationButton>
         </div>
       </Card>
+
+        </>
+      )}
 
       {dnsFor && presets.length > 0 && <DnsDialog adapter={dnsFor.a} presets={presets} initial={dnsFor.initial} onClose={() => setDnsFor(null)} onDone={load} />}
 

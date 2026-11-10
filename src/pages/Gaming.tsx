@@ -1,16 +1,18 @@
-import { ChevronRight, Layers } from "lucide-react";
+import { Activity, ChevronRight, Gamepad2, Layers, Monitor, Timer } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { DisplaysCard } from "../components/gaming/DisplaysCard";
 import { FpsMonitor } from "../components/gaming/FpsMonitor";
 import { GameProfiles } from "../components/gaming/GameProfiles";
 import { GpuCard } from "../components/gaming/GpuCard";
-import { NetworkCard } from "../components/gaming/NetworkCard";
 import { PresetsSection } from "../components/gaming/PresetsSection";
 import { TweakPanel } from "../components/tweaks/TweakPanel";
 import { Card } from "../components/ui/Card";
+import { LatencyPanel } from "../components/tweaks/LatencyPanel";
+import { SubTabs } from "../components/ui/SubTabs";
 import { useSystem } from "../context/SystemContext";
 import { api, errorMessage, type DisplayInfo, type LastPreset, type PresetInfo, type TweakInfo } from "../lib/api";
 import { formatBytes } from "../lib/format";
+import { peekIntent } from "../lib/intent";
 import type { PageId } from "../navigation";
 
 const SYSTEM_PROCESSES = new Set([
@@ -18,8 +20,18 @@ const SYSTEM_PROCESSES = new Set([
   "explorer.exe", "csrss.exe", "lsass.exe", "searchhost.exe", "startmenuexperiencehost.exe", "mpdefendercoreservice.exe",
 ]);
 
+type Tab = "presets" | "performance" | "latency" | "games";
+// Remembered while the app runs, so coming back to Gaming opens the same tab.
+let lastTab: Tab = "presets";
+
 export function Gaming({ onNavigate }: { onNavigate: (id: PageId) => void }) {
   const { live } = useSystem();
+  // The Dashboard's preset shortcut always lands on the presets tab.
+  const [tab, setTabState] = useState<Tab>(() => (peekIntent("preview-preset") ? "presets" : lastTab));
+  const setTab = (t: Tab) => {
+    lastTab = t;
+    setTabState(t);
+  };
   const [presets, setPresets] = useState<PresetInfo[] | null>(null);
   const [last, setLast] = useState<LastPreset | null>(null);
   const [tweaks, setTweaks] = useState<TweakInfo[] | null>(null);
@@ -77,24 +89,22 @@ export function Gaming({ onNavigate }: { onNavigate: (id: PageId) => void }) {
     <div className="space-y-6">
       {error && <div className="rounded-xl border border-bad/30 bg-bad/10 px-4 py-3 text-sm text-bad">{error}</div>}
 
-      <PresetsSection presets={presets} last={last} reload={reloadAll} />
+      <SubTabs<Tab>
+        value={tab}
+        onChange={setTab}
+        tabs={[
+          { id: "presets", label: "Presets & overview", icon: Gamepad2 },
+          { id: "performance", label: "FPS & performance", icon: Activity, count: tweaks?.length },
+          { id: "latency", label: "Latency", icon: Timer },
+          { id: "games", label: "Games & displays", icon: Monitor },
+        ]}
+      />
 
-      <FpsMonitor />
-
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <DisplaysCard displays={displays} reload={loadDisplays} />
-        <GpuCard />
-      </div>
-
-      <section className="space-y-3">
-        <h2 className="text-[15px] font-semibold">Windows gaming features</h2>
-        <TweakPanel tweaks={tweaks} reload={reloadAll} onExplorerChange={() => undefined} />
-      </section>
-
-      <GameProfiles />
-
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-        <NetworkCard />
+      {tab === "presets" && (
+        <>
+          <PresetsSection presets={presets} last={last} reload={reloadAll} />
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+            <GpuCard />
         <Card title="Background apps" icon={Layers} className="h-full">
           <p className="text-xs text-muted">Apps using noticeable CPU or memory right now. Close the ones you don't need before playing.</p>
           <ul className="mt-3 space-y-1.5">
@@ -123,7 +133,25 @@ export function Gaming({ onNavigate }: { onNavigate: (id: PageId) => void }) {
             </button>
           </div>
         </Card>
-      </div>
+          </div>
+        </>
+      )}
+
+      {tab === "performance" && (
+        <>
+          <FpsMonitor />
+          <TweakPanel tweaks={tweaks} reload={reloadAll} onExplorerChange={() => undefined} />
+        </>
+      )}
+
+      {tab === "latency" && <LatencyPanel focus="gaming" />}
+
+      {tab === "games" && (
+        <>
+          <GameProfiles />
+          <DisplaysCard displays={displays} reload={loadDisplays} />
+        </>
+      )}
     </div>
   );
 }

@@ -253,7 +253,7 @@ export interface WindowsFeature {
 
 // ---------------- Tweaks & system ----------------
 
-export type TweakCategory = "performance" | "privacy" | "windows" | "system" | "gaming";
+export type TweakCategory = "performance" | "privacy" | "windows" | "system" | "gaming" | "network";
 export type TweakState = "on" | "off" | "custom";
 
 export interface TweakInfo {
@@ -271,6 +271,8 @@ export interface TweakInfo {
   atDefault: boolean;
   /** Windows' default is the "on" state (e.g. Game Mode). */
   defaultOn: boolean;
+  /** Also listed in the Latency sections (Gaming and Network pages). */
+  latency: boolean;
   changesOn: string[];
   changesOff: string[];
   canUndo: boolean;

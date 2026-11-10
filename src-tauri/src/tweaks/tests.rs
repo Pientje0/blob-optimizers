@@ -70,6 +70,7 @@ static TEST_TWEAK: Tweak = Tweak {
     after: After::Nothing,
     min_build: 0,
     default_on: false,
+    latency: false,
 };
 
 #[test]
@@ -196,4 +197,47 @@ fn processes_are_listed_and_critical_ones_protected() {
     assert!(pm.end(lsass.pid, &lsass.name, lsass.start_time, false, false).is_err());
     // A stale PID / name pair is refused.
     assert!(pm.end(lsass.pid, "notepad.exe", lsass.start_time, false, false).is_err());
+}
+
+#[test]
+fn command_checks_run_and_apply_scripts_parse() {
+    use std::time::Instant;
+    model::invalidate_cmd_cache();
+    let started = Instant::now();
+    refresh_states();
+    let took = started.elapsed();
+    let cmds: Vec<&model::Cmd> = catalog::TWEAKS.iter().flat_map(|t| t.cmds()).collect();
+    assert!(!cmds.is_empty());
+    for t in catalog::TWEAKS.iter().filter(|t| t.cmds().next().is_some()) {
+        println!("{:<34} available={:<5} state={:?}", t.id, t.available(), t.state());
+    }
+    println!("checks took {took:?}");
+    assert!(took < Duration::from_secs(30), "checks too slow: {took:?}");
+    // The USB power setting exists on every Windows PC with a power plan.
+    assert!(catalog::find("game.usb_suspend_off").unwrap().available(), "powercfg check failed");
+
+    // Every apply script must at least be valid PowerShell (they are not run here: they change the system).
+    let mut script = String::from("$errs = 0\n");
+    for c in &cmds {
+        let body = c.apply.replace('\'', "''");
+        script.push_str(&format!(
+            "$t = $null; $e = $null; [void][System.Management.Automation.Language.Parser]::ParseInput('{body}', [ref]$t, [ref]$e); if ($e.Count) {{ $errs++; Write-Output ('{}: ' + $e[0].Message) }}\n",
+            c.key
+        ));
+    }
+    script.push_str("if ($errs) { exit 1 }\n");
+    let out = crate::util::powershell::run(&script, Duration::from_secs(60));
+    assert!(out.is_ok(), "apply scripts have syntax errors: {out:?}");
+
+    // Latency sections have content in both places.
+    assert!(catalog::TWEAKS.iter().filter(|t| t.latency && t.category == Category::Gaming).count() >= 8);
+    assert!(catalog::TWEAKS.iter().filter(|t| t.latency && t.category == Category::Network).count() >= 3);
+}
+
+#[test]
+#[ignore = "manual: writes the live tweak list as JSON to $BLOB_DUMP for UI previews"]
+fn dump_tweak_list() {
+    let Ok(path) = std::env::var("BLOB_DUMP") else { return };
+    let t = Tweaks::new(temp_dir("dump"));
+    std::fs::write(path, serde_json::to_string(&t.list()).unwrap()).unwrap();
 }

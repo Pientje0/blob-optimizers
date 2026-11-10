@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0
+
+- **Latency section** in three places: Gaming › Latency, Network › Latency & tweaks and Windows Tweaks › Latency. It lists every input, scheduling, power and network latency setting with a ping test.
+- **29 new tweaks (94 in total; ones your hardware or Windows version doesn't support are hidden):**
+  - Gaming: fullscreen optimizations off globally, multiplane overlay off, foreground-favouring CPU time slices (Win32PrioritySeparation), global timer resolution requests, USB selective suspend off, shorter keyboard repeat delay, Toggle/Filter Keys shortcuts off, Game Bar controller button and tips.
+  - Network: Nagle's algorithm off, interrupt moderation, Energy-Efficient Ethernet and flow control off, local-first name resolution, LLMNR off.
+  - Also performance (Edge background, search indexing, drag outlines, selection effects), privacy (inking/typing, online speech, error reporting), Windows (taskbar seconds, snap flyout, shake to minimise, dark mode) and system (verbose status, blue-screen details) tweaks.
+- **Settings backed by reviewed PowerShell checks** (network-adapter properties, power-plan values). They're read in one background pass at startup, are hidden when your hardware doesn't support them, and can be undone.
+- **Reorganised pages:**
+  - Gaming: tabs for Presets & overview, FPS & performance, Latency, Games & displays.
+  - Network: tabs for Adapters, Latency & tweaks, Diagnostics/DNS test/repair.
+  - Windows Tweaks: Latency, Gaming, Network and All tabs.
+  - Tweak lists: search, filters (applied / not applied / recommended) and a denser two-column layout.
+- Gaming presets also handle the Toggle/Filter Keys prompts and Game Bar tips. Maximum Performance adds foreground-favouring time slices.
+
 ## 0.1.0 — first release
 
 Everything below runs through the built-in command engine with reviewed, parameter-validated operations; each change is explained before it runs and logged in the Terminal tab.

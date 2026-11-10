@@ -45,6 +45,10 @@ const ALL_GAMING: &[&str] = &[
     "perf.power_throttling",
     "perf.transparency",
     "perf.window_animations",
+    "game.toggle_keys_prompt_off",
+    "game.filter_keys_prompt_off",
+    "game.gamebar_tips",
+    "game.priority_separation",
 ];
 
 pub static PRESETS: &[Preset] = &[
@@ -65,13 +69,17 @@ pub static PRESETS: &[Preset] = &[
             ("perf.power_throttling", Target::Default),
             ("perf.transparency", Target::Default),
             ("perf.window_animations", Target::Default),
+            ("game.priority_separation", Target::Default),
+            ("game.toggle_keys_prompt_off", Target::Default),
+            ("game.filter_keys_prompt_off", Target::Default),
+            ("game.gamebar_tips", Target::Default),
         ],
         plan: Plan::Balanced,
     },
     Preset {
         id: "gaming",
         name: "Gaming",
-        description: "Game Mode, no background recording, flip-model presentation for windowed games, raw mouse input, no Sticky Keys pop-up, and the High performance power plan.",
+        description: "Game Mode, no background recording, flip-model presentation for windowed games, raw mouse input, no Sticky/Toggle/Filter Keys pop-ups or Game Bar tips, and the High performance power plan.",
         warning: None,
         tweaks: &[
             ("game.game_mode", Target::On),
@@ -79,13 +87,16 @@ pub static PRESETS: &[Preset] = &[
             ("game.windowed_optimizations", Target::On),
             ("game.mouse_acceleration_off", Target::On),
             ("game.sticky_keys_prompt_off", Target::On),
+            ("game.toggle_keys_prompt_off", Target::On),
+            ("game.filter_keys_prompt_off", Target::On),
+            ("game.gamebar_tips", Target::On),
         ],
         plan: Plan::High,
     },
     Preset {
         id: "maximum",
         name: "Maximum Performance",
-        description: "Everything in Gaming, plus multimedia-scheduler priority for games, less CPU reserved for background work, no network or power throttling, fewer visual effects, and the Ultimate Performance power plan.",
+        description: "Everything in Gaming, plus multimedia-scheduler priority for games, short foreground-favouring CPU time slices, less CPU reserved for background work, no network or power throttling, fewer visual effects, and the Ultimate Performance power plan.",
         warning: Some(
             "Uses noticeably more power and produces more heat; on laptops battery life drops. Background apps, audio and downloads get less priority while you play. The extra gains over the Gaming preset are small and vary by game; measure with the FPS monitor before and after.",
         ),
@@ -101,6 +112,10 @@ pub static PRESETS: &[Preset] = &[
             ("perf.power_throttling", Target::On),
             ("perf.transparency", Target::On),
             ("perf.window_animations", Target::On),
+            ("game.toggle_keys_prompt_off", Target::On),
+            ("game.filter_keys_prompt_off", Target::On),
+            ("game.gamebar_tips", Target::On),
+            ("game.priority_separation", Target::On),
         ],
         plan: Plan::Ultimate,
     },
@@ -202,6 +217,7 @@ impl Gaming {
     }
 
     pub fn presets(&self) -> AppResult<Vec<PresetInfo>> {
+        crate::tweaks::refresh_states();
         let info = system::info()?;
         let active = info.plans.iter().find(|p| p.active);
         let (aname, aguid) = active.map(|p| (p.name.as_str(), p.guid.as_str())).unwrap_or(("", ""));

@@ -1,7 +1,7 @@
 //! The reviewed tweak catalogue. Every entry documents what it changes; none disable Microsoft Defender,
 //! Windows Firewall or Windows Update.
 
-use super::model::{After, Category, Op, Op::*, Recommend, StartType, Tweak, V::*};
+use super::model::{After, Category, Cmd, Op, Op::*, Recommend, StartType, Tweak, V::*};
 use crate::util::registry::Hive::{CurrentUser as CU, LocalMachine as LM};
 
 const ADV: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced";
@@ -25,11 +25,11 @@ const fn t(
     after: After,
     min_build: u32,
 ) -> Tweak {
-    Tweak { id, title, description, caveat, category, group, on, off, recommend, after, min_build, default_on: false }
+    Tweak { id, title, description, caveat, category, group, on, off, recommend, after, min_build, default_on: false, latency: false }
 }
 
 use After::{Explorer, Nothing, Restart, SignOut};
-use Category::{Gaming as GAME, Performance as PERF, Privacy as PRIV, System as SYS, Windows as WIN};
+use Category::{Gaming as GAME, Network as NET, Performance as PERF, Privacy as PRIV, System as SYS, Windows as WIN};
 
 const MM: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile";
 const MM_GAMES: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games";
@@ -52,6 +52,88 @@ macro_rules! deny_app_access {
         )
     };
 }
+
+
+/// Marks a tweak for the Latency sections.
+const fn lat(t: Tweak) -> Tweak {
+    Tweak { latency: true, ..t }
+}
+
+const GCS: &str = r"System\GameConfigStore";
+const TCPIP_SP: &str = r"SYSTEM\CurrentControlSet\Services\Tcpip\ServiceProvider";
+
+// ---------- Command-backed settings (reviewed PowerShell; checks are read-only, see model::CHECK_PRELUDE) ----------
+
+/// A network adapter "advanced property", matched by exact keyword (the cmdlet's -RegistryKeyword is a wildcard,
+/// so `*EEE` would also match `AdvancedEEE`).
+macro_rules! adv_cmd {
+    ($name:ident, $key:literal, $kw:literal, $val:literal, $desc:literal) => {
+        static $name: Cmd = Cmd {
+            key: $key,
+            check: concat!("__adv '", $kw, "' '", $val, "'"),
+            apply: concat!(
+                "$__names = @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object Status -ne 'Disabled' | ForEach-Object Name)\n",
+                "$__p = @(Get-NetAdapterAdvancedProperty -Name $__names -ErrorAction Stop | Where-Object { $_.RegistryKeyword -eq '", $kw, "' })\n",
+                "if (-not $__p.Count) { throw 'No network adapter on this PC has this setting.' }\n",
+                "foreach ($__x in $__p) { if (\"$($__x.RegistryValue)\" -ne '", $val, "') { '  ' + $__x.Name + ': ' + $__x.DisplayName + ' = ", $val, "'; $__x | Set-NetAdapterAdvancedProperty -RegistryValue '", $val, "' -ErrorAction Stop } }\n"
+            ),
+            describe: $desc,
+            admin: true,
+        };
+    };
+}
+
+/// A setting of the active power plan, for both plugged in (AC) and battery (DC).
+macro_rules! pw_cmd {
+    ($name:ident, $key:literal, $sub:literal, $set:literal, $val:literal, $desc:literal) => {
+        static $name: Cmd = Cmd {
+            key: $key,
+            check: concat!("__pw '", $sub, "' '", $set, "' ", $val),
+            apply: concat!(
+                "powercfg /setacvalueindex SCHEME_CURRENT ", $sub, " ", $set, " ", $val, "\n",
+                "if ($LASTEXITCODE) { throw 'powercfg could not change the setting.' }\n",
+                "powercfg /setdcvalueindex SCHEME_CURRENT ", $sub, " ", $set, " ", $val, "\n",
+                "if ($LASTEXITCODE) { throw 'powercfg could not change the setting.' }\n",
+                "powercfg /setactive SCHEME_CURRENT\n",
+                "'  Active power plan updated'\n"
+            ),
+            describe: $desc,
+            admin: false,
+        };
+    };
+}
+
+adv_cmd!(EEE_OFF, "adv.eee.0", "*EEE", "0", "Network adapters › Energy-Efficient Ethernet = Disabled (adapter restarts)");
+adv_cmd!(EEE_ON, "adv.eee.1", "*EEE", "1", "Network adapters › Energy-Efficient Ethernet = Enabled (adapter restarts)");
+adv_cmd!(IM_OFF, "adv.im.0", "*InterruptModeration", "0", "Network adapters › Interrupt Moderation = Disabled (adapter restarts)");
+adv_cmd!(IM_ON, "adv.im.1", "*InterruptModeration", "1", "Network adapters › Interrupt Moderation = Enabled (adapter restarts)");
+adv_cmd!(FLOW_OFF, "adv.flow.0", "*FlowControl", "0", "Network adapters › Flow Control = Disabled (adapter restarts)");
+adv_cmd!(FLOW_ON, "adv.flow.3", "*FlowControl", "3", "Network adapters › Flow Control = Rx & Tx Enabled (adapter restarts)");
+
+pw_cmd!(USB_SUSPEND_OFF, "pw.usbss.0", "2a737441-1930-4402-8d77-b2bebba308a3", "48e6b7a6-50f5-4782-a5d4-53bb8f07e226", 0, "Active power plan › USB selective suspend = Disabled (plugged in and on battery)");
+pw_cmd!(USB_SUSPEND_ON, "pw.usbss.1", "2a737441-1930-4402-8d77-b2bebba308a3", "48e6b7a6-50f5-4782-a5d4-53bb8f07e226", 1, "Active power plan › USB selective suspend = Enabled (plugged in and on battery)");
+
+static NAGLE_OFF: Cmd = Cmd {
+    key: "tcp.nagle.off",
+    check: "if (-not $__ifs.Count) { $null } else { -not ($__ifs | Where-Object { $p = Get-ItemProperty $_.PSPath; $p.TcpAckFrequency -ne 1 -or $p.TCPNoDelay -ne 1 }) }",
+    apply: concat!(
+        "$__ifs = @(Get-ChildItem 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces' -ErrorAction Stop | Where-Object { $p = Get-ItemProperty $_.PSPath; ($p.DhcpIPAddress -and $p.DhcpIPAddress -ne '0.0.0.0') -or (@($p.IPAddress) | Where-Object { $_ -and $_ -ne '0.0.0.0' }) })\n",
+        "if (-not $__ifs.Count) { throw 'No connected network interface found.' }\n",
+        "foreach ($i in $__ifs) { '  Interface ' + $i.PSChildName; Set-ItemProperty -Path $i.PSPath -Name TcpAckFrequency -Value 1 -Type DWord -ErrorAction Stop; Set-ItemProperty -Path $i.PSPath -Name TCPNoDelay -Value 1 -Type DWord -ErrorAction Stop }\n"
+    ),
+    describe: "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{each connected interface} › TcpAckFrequency = 1, TCPNoDelay = 1",
+    admin: true,
+};
+static NAGLE_DEFAULT: Cmd = Cmd {
+    key: "tcp.nagle.default",
+    check: "if (-not $__ifs.Count) { $null } else { -not ($__ifs | Where-Object { $p = Get-ItemProperty $_.PSPath; $null -ne $p.TcpAckFrequency -or $null -ne $p.TCPNoDelay }) }",
+    apply: concat!(
+        "foreach ($i in @(Get-ChildItem 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces' -ErrorAction Stop)) { Remove-ItemProperty -Path $i.PSPath -Name TcpAckFrequency, TCPNoDelay -ErrorAction SilentlyContinue }\n",
+        "'  TcpAckFrequency and TCPNoDelay removed from all interfaces'\n"
+    ),
+    describe: "HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{all} › TcpAckFrequency, TCPNoDelay removed",
+    admin: true,
+};
 
 pub static TWEAKS: &[Tweak] = &[
     // ===================== Performance =====================
@@ -87,12 +169,12 @@ pub static TWEAKS: &[Tweak] = &[
         &[Set(CU, r"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications", "GlobalUserDisabled", D(1))],
         &[Opt(CU, r"Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications", "GlobalUserDisabled", D(0))],
         Either, Nothing, 0),
-    t("perf.power_throttling", PERF, "Background activity", "Turn off power throttling",
+    lat(t("perf.power_throttling", PERF, "Background activity", "Turn off power throttling",
         "Windows normally slows down background apps to save power. Turning this off gives them full CPU speed.",
         Some("On laptops this reduces battery life. On desktops the effect is usually small."),
         &[Set(LM, r"SYSTEM\CurrentControlSet\Control\Power\PowerThrottling", "PowerThrottlingOff", D(1))],
         &[Del(LM, r"SYSTEM\CurrentControlSet\Control\Power\PowerThrottling", "PowerThrottlingOff")],
-        Either, Restart, 0),
+        Either, Restart, 0)),
     t("perf.sysmain", PERF, "Background activity", "Turn off SysMain (Superfetch)",
         "SysMain preloads apps you use often into spare memory so they open faster.",
         Some("Usually best left on: free memory is used as cache and released instantly when needed. Turning it off can make apps open slower."),
@@ -398,19 +480,19 @@ pub static TWEAKS: &[Tweak] = &[
             Del(CU, r"Software\Microsoft\Windows\CurrentVersion\GameDVR", "HistoricalCaptureEnabled"),
         ],
         Apply, Nothing, 0),
-    t("game.windowed_optimizations", GAME, "Windows gaming features", "Optimizations for windowed games",
+    lat(t("game.windowed_optimizations", GAME, "Windows gaming features", "Optimizations for windowed games",
         "Uses the modern flip presentation model for DirectX 10/11 games in windowed and borderless mode: lower latency and support for Auto HDR and variable refresh rate.",
         Some("A few older games may show glitches; turn it off again if one does."),
         &[Set(CU, r"Software\Microsoft\DirectX\UserGpuPreferences", "DirectXUserGlobalSettings", S("SwapEffectUpgradeEnable=1;"))],
         &[Del(CU, r"Software\Microsoft\DirectX\UserGpuPreferences", "DirectXUserGlobalSettings")],
-        Apply, Nothing, WIN11),
+        Apply, Nothing, WIN11)),
     t("game.hags", GAME, "Windows gaming features", "Hardware-accelerated GPU scheduling",
         "Lets the graphics card manage its own memory scheduling. Required by some features such as DLSS Frame Generation; effects on frame rate vary by game and driver.",
         Some("Needs a supported GPU and driver. If games stutter or crash afterwards, turn it back off."),
         &[Set(LM, r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers", "HwSchMode", D(2))],
         &[Del(LM, r"SYSTEM\CurrentControlSet\Control\GraphicsDrivers", "HwSchMode")],
         Either, Restart, 19041),
-    t("game.mouse_acceleration_off", GAME, "Input", "Turn off mouse acceleration",
+    lat(t("game.mouse_acceleration_off", GAME, "Input", "Turn off mouse acceleration",
         "Disables 'Enhance pointer precision' so the cursor moves the same distance for the same hand movement, regardless of speed. Preferred for aiming.",
         Some("The pointer may feel slower on the desktop; adjust your mouse DPI or pointer speed to taste."),
         &[
@@ -423,13 +505,13 @@ pub static TWEAKS: &[Tweak] = &[
             Opt(CU, r"Control Panel\Mouse", "MouseThreshold1", S("6")),
             Opt(CU, r"Control Panel\Mouse", "MouseThreshold2", S("10")),
         ],
-        Apply, SignOut, 0),
+        Apply, SignOut, 0)),
     t("game.sticky_keys_prompt_off", GAME, "Input", "Turn off the Sticky Keys shortcut",
         "Pressing Shift five times no longer opens the Sticky Keys prompt and minimises your game.", None,
         &[Set(CU, r"Control Panel\Accessibility\StickyKeys", "Flags", S("506"))],
         &[Opt(CU, r"Control Panel\Accessibility\StickyKeys", "Flags", S("510"))],
         Apply, SignOut, 0),
-    t("game.games_priority", GAME, "Scheduling", "Prioritise games in the multimedia scheduler",
+    lat(t("game.games_priority", GAME, "Scheduling", "Prioritise games in the multimedia scheduler",
         "Raises the CPU and I/O priority Windows' multimedia scheduler (MMCSS) gives to games that register with it.",
         Some("Only affects games that use MMCSS; the effect is usually small. Background audio or streaming can become less smooth under heavy load."),
         &[
@@ -444,18 +526,191 @@ pub static TWEAKS: &[Tweak] = &[
             Opt(LM, MM_GAMES, "Scheduling Category", S("Medium")),
             Opt(LM, MM_GAMES, "SFIO Priority", S("Normal")),
         ],
-        Either, Restart, 0),
-    t("game.system_responsiveness", GAME, "Scheduling", "Reserve less CPU for background tasks",
+        Either, Restart, 0)),
+    lat(t("game.system_responsiveness", GAME, "Scheduling", "Reserve less CPU for background tasks",
         "Lowers the share of CPU time the multimedia scheduler reserves for low-priority work from 20% to 10% while games and media run.",
         Some("Small, game-dependent effect. Background tasks get less CPU while you play."),
         &[Set(LM, MM, "SystemResponsiveness", D(10))],
         &[Opt(LM, MM, "SystemResponsiveness", D(20))],
-        Either, Restart, 0),
-    t("game.network_throttling_off", GAME, "Scheduling", "Turn off network throttling",
+        Either, Restart, 0)),
+    lat(t("game.network_throttling_off", GAME, "Scheduling", "Turn off network throttling",
         "Windows limits non-multimedia network traffic while audio or video plays. Turning this off removes that limit.",
         Some("Mainly helps downloads while media plays; it rarely changes in-game ping."),
         &[Set(LM, MM, "NetworkThrottlingIndex", D(0xFFFF_FFFF))],
         &[Opt(LM, MM, "NetworkThrottlingIndex", D(10))],
+        Either, Restart, 0)),
+
+    // ===================== Latency & FPS (Gaming page) =====================
+    lat(t("game.fso_off", GAME, "Display & frames", "Turn off fullscreen optimizations for all games",
+        "Makes exclusive-fullscreen games run in true exclusive fullscreen instead of Windows' optimised borderless mode. Some players measure lower input lag or steadier frame pacing; per-game control is in Game profiles.",
+        Some("Alt+Tab is slower, overlays (Game Bar, some notifications) may not show over the game, and Auto HDR/windowed VRR features don't apply to those games."),
+        &[Set(CU, GCS, "GameDVR_FSEBehaviorMode", D(2)), Set(CU, GCS, "GameDVR_HonorUserFSEBehaviorMode", D(1)), Set(CU, GCS, "GameDVR_FSEBehavior", D(2)), Set(CU, GCS, "GameDVR_DXGIHonorFSEWindowsCompatible", D(1))],
+        &[Opt(CU, GCS, "GameDVR_HonorUserFSEBehaviorMode", D(0)), Opt(CU, GCS, "GameDVR_DXGIHonorFSEWindowsCompatible", D(0)), Del(CU, GCS, "GameDVR_FSEBehavior")],
+        Either, Nothing, 0)),
+    t("game.mpo_off", GAME, "Display & frames", "Turn off multiplane overlay (MPO)",
+        "Stops the desktop compositor using hardware overlay planes. Fixes flickering, black screens and stutter that some NVIDIA/AMD driver versions show in borderless games and video.",
+        Some("Only change this if you see flicker or stutter: on systems without those problems MPO saves GPU work and power."),
+        &[Set(LM, r"SOFTWARE\Microsoft\Windows\Dwm", "OverlayTestMode", D(5))],
+        &[Del(LM, r"SOFTWARE\Microsoft\Windows\Dwm", "OverlayTestMode")],
+        Keep, Restart, 0),
+    lat(t("game.priority_separation", GAME, "Scheduling", "Favour the foreground app (short CPU time slices)",
+        "Sets Win32PrioritySeparation to 0x26: short, variable time slices with the maximum boost for the window you're using. The game gets the CPU back sooner after background work, which can reduce input-to-frame delay.",
+        Some("Background work (compiles, encodes, downloads) gets less CPU while a game is focused."),
+        &[Set(LM, r"SYSTEM\CurrentControlSet\Control\PriorityControl", "Win32PrioritySeparation", D(0x26))],
+        &[Opt(LM, r"SYSTEM\CurrentControlSet\Control\PriorityControl", "Win32PrioritySeparation", D(2))],
+        Either, Nothing, 0)),
+    lat(t("game.timer_resolution", GAME, "Scheduling", "Honour high timer resolution requests globally",
+        "Since Windows 11, a game asking for a 0.5–1 ms system timer only gets it while its window is visible. This restores the older global behaviour, which keeps frame limiters and input polling precise when overlays or a second monitor are in use.",
+        Some("Slightly higher idle power use while any app requests a fine timer (most browsers and launchers do)."),
+        &[Set(LM, r"SYSTEM\CurrentControlSet\Control\Session Manager\kernel", "GlobalTimerResolutionRequests", D(1))],
+        &[Del(LM, r"SYSTEM\CurrentControlSet\Control\Session Manager\kernel", "GlobalTimerResolutionRequests")],
+        Either, Restart, WIN11)),
+    lat(t("game.usb_suspend_off", GAME, "Power", "Turn off USB selective suspend",
+        "Stops Windows putting idle USB devices to sleep. Prevents the short wake-up delay or dropouts some mice, keyboards, headsets and controllers show after being idle.",
+        Some("Applies to the active power plan (switching plans uses that plan's value). Laptops use a little more battery."),
+        &[Cmd(&USB_SUSPEND_OFF)],
+        &[Cmd(&USB_SUSPEND_ON)],
+        Apply, Nothing, 0)),
+    lat(t("game.keyboard_delay", GAME, "Input", "Shortest keyboard repeat delay",
+        "Held keys start repeating after about 250 ms instead of 500 ms (repeat rate stays at the fastest setting).", None,
+        &[Set(CU, r"Control Panel\Keyboard", "KeyboardDelay", S("0")), Set(CU, r"Control Panel\Keyboard", "KeyboardSpeed", S("31"))],
+        &[Opt(CU, r"Control Panel\Keyboard", "KeyboardDelay", S("1")), Opt(CU, r"Control Panel\Keyboard", "KeyboardSpeed", S("31"))],
+        Either, SignOut, 0)),
+    t("game.toggle_keys_prompt_off", GAME, "Input", "Turn off the Toggle Keys shortcut",
+        "Holding Num Lock for five seconds no longer opens the Toggle Keys prompt over your game.", None,
+        &[Set(CU, r"Control Panel\Accessibility\ToggleKeys", "Flags", S("58"))],
+        &[Opt(CU, r"Control Panel\Accessibility\ToggleKeys", "Flags", S("62"))],
+        Apply, SignOut, 0),
+    t("game.filter_keys_prompt_off", GAME, "Input", "Turn off the Filter Keys shortcut",
+        "Holding right Shift for eight seconds no longer opens the Filter Keys prompt (which can make keys ignore quick presses).", None,
+        &[Set(CU, r"Control Panel\Accessibility\Keyboard Response", "Flags", S("122"))],
+        &[Opt(CU, r"Control Panel\Accessibility\Keyboard Response", "Flags", S("126"))],
+        Apply, SignOut, 0),
+    t("game.gamebar_controller", GAME, "Game Bar", "Don't open Game Bar with the controller Xbox button",
+        "Pressing the Xbox/guide button on a controller no longer pops up Game Bar over your game.", None,
+        &[Set(CU, r"Software\Microsoft\GameBar", "UseNexusForGameBarEnabled", D(0))],
+        &[Opt(CU, r"Software\Microsoft\GameBar", "UseNexusForGameBarEnabled", D(1))],
+        Either, Nothing, 0),
+    t("game.gamebar_tips", GAME, "Game Bar", "Hide Game Bar tips when a game starts",
+        "Stops the 'Press Win+G to open Game Bar' popup when you launch a game.", None,
+        &[Set(CU, r"Software\Microsoft\GameBar", "ShowStartupPanel", D(0))],
+        &[Opt(CU, r"Software\Microsoft\GameBar", "ShowStartupPanel", D(1))],
+        Apply, Nothing, 0),
+
+    // ===================== Network (Network page) =====================
+    lat(t("net.nagle_off", NET, "TCP", "Turn off Nagle's algorithm (send small packets immediately)",
+        "Sets TcpAckFrequency and TCPNoDelay on every connected interface, so small TCP packets are sent and acknowledged immediately instead of being batched. Can lower latency in older TCP-based games (MMOs, some strategy games) and remote desktop.",
+        Some("Most modern shooters use UDP and are unaffected. Slightly more packets on the network. Interfaces that connect later aren't included: apply again after changing networks."),
+        &[Cmd(&NAGLE_OFF)],
+        &[Cmd(&NAGLE_DEFAULT)],
+        Either, Restart, 0)),
+    lat(t("net.interrupt_moderation_off", NET, "Adapter", "Turn off interrupt moderation",
+        "Network adapters normally group incoming packets and interrupt the CPU less often. Turning it off delivers each packet immediately, lowering network latency by a fraction of a millisecond.",
+        Some("Higher CPU use under heavy traffic (downloads, streaming). The adapter restarts, so you're offline for a few seconds."),
+        &[Cmd(&IM_OFF)],
+        &[Cmd(&IM_ON)],
+        Either, Nothing, 0)),
+    lat(t("net.eee_off", NET, "Adapter", "Turn off Energy-Efficient Ethernet",
+        "Stops the wired adapter dropping into low-power mode between packets, which can add small delays and, with some switches, brief dropouts.",
+        Some("Slightly higher power use. The adapter restarts, so you're offline for a few seconds."),
+        &[Cmd(&EEE_OFF)],
+        &[Cmd(&EEE_ON)],
+        Apply, Nothing, 0)),
+    lat(t("net.flow_control_off", NET, "Adapter", "Turn off Ethernet flow control",
+        "Stops the adapter pausing traffic when the other end says it's overloaded. Can avoid latency spikes on busy home networks.",
+        Some("On congested networks some packets may be dropped instead of paused. The adapter restarts, so you're offline for a few seconds."),
+        &[Cmd(&FLOW_OFF)],
+        &[Cmd(&FLOW_ON)],
+        Either, Nothing, 0)),
+    t("net.host_priority", NET, "Name resolution", "Resolve names locally first",
+        "Raises the priority of the local, hosts-file, DNS and NetBIOS name resolvers so lookups that can be answered on this PC finish sooner.",
+        Some("Small effect; mostly helps on networks with slow NetBIOS or DNS."),
+        &[Set(LM, TCPIP_SP, "LocalPriority", D(4)), Set(LM, TCPIP_SP, "HostsPriority", D(5)), Set(LM, TCPIP_SP, "DnsPriority", D(6)), Set(LM, TCPIP_SP, "NetbtPriority", D(7))],
+        &[Opt(LM, TCPIP_SP, "LocalPriority", D(499)), Opt(LM, TCPIP_SP, "HostsPriority", D(500)), Opt(LM, TCPIP_SP, "DnsPriority", D(2000)), Opt(LM, TCPIP_SP, "NetbtPriority", D(2001))],
+        Either, Restart, 0),
+    t("net.llmnr_off", NET, "Name resolution", "Turn off multicast name resolution (LLMNR)",
+        "Stops Windows asking every device on the local network to resolve names DNS couldn't. Removes a common spoofing risk on public Wi-Fi and some lookup delay.",
+        Some("Finding other PCs by name on a network without DNS (small LANs) may stop working; use their IP address instead."),
+        &[Set(LM, r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "EnableMulticast", D(0))],
+        &[Del(LM, r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "EnableMulticast")],
+        Either, Nothing, 0),
+
+    // ===================== More performance / privacy / Windows =====================
+    t("perf.edge_background", PERF, "Background activity", "Stop Microsoft Edge running in the background",
+        "Turns off Edge's Startup boost and background mode, so Edge doesn't keep processes running after you close it or preload at sign-in.",
+        Some("Edge opens a moment slower."),
+        &[Set(LM, r"SOFTWARE\Policies\Microsoft\Edge", "StartupBoostEnabled", D(0)), Set(LM, r"SOFTWARE\Policies\Microsoft\Edge", "BackgroundModeEnabled", D(0))],
+        &[Del(LM, r"SOFTWARE\Policies\Microsoft\Edge", "StartupBoostEnabled"), Del(LM, r"SOFTWARE\Policies\Microsoft\Edge", "BackgroundModeEnabled")],
+        Apply, Nothing, 0),
+    t("perf.search_indexing", PERF, "Background activity", "Turn off search indexing",
+        "Stops the Windows Search service from indexing your files in the background.",
+        Some("Usually best left on: Start, File Explorer and Outlook search become much slower without the index."),
+        &[Svc("WSearch", StartType::Disabled)],
+        &[Svc("WSearch", StartType::Automatic)],
+        Keep, Nothing, 0),
+    t("perf.drag_full_windows", PERF, "Visual effects", "Show only an outline while dragging windows",
+        "Windows show a frame instead of their contents while you move them.", None,
+        &[Set(CU, r"Control Panel\Desktop", "DragFullWindows", S("0"))],
+        &[Opt(CU, r"Control Panel\Desktop", "DragFullWindows", S("1"))],
+        Either, SignOut, 0),
+    t("perf.listview_effects", PERF, "Visual effects", "Turn off selection and icon shadow effects",
+        "Uses a plain selection rectangle and no drop shadows on desktop icon labels.", None,
+        &[Set(CU, ADV, "ListviewAlphaSelect", D(0)), Set(CU, ADV, "ListviewShadow", D(0))],
+        &[Opt(CU, ADV, "ListviewAlphaSelect", D(1)), Opt(CU, ADV, "ListviewShadow", D(1))],
+        Either, Explorer, 0),
+    t("priv.inking_typing", PRIV, "Diagnostics", "Turn off inking and typing personalisation",
+        "Stops Windows collecting what you type and write to build a personal dictionary.", None,
+        &[
+            Set(CU, r"Software\Microsoft\InputPersonalization", "RestrictImplicitTextCollection", D(1)),
+            Set(CU, r"Software\Microsoft\InputPersonalization", "RestrictImplicitInkCollection", D(1)),
+            Set(CU, r"Software\Microsoft\InputPersonalization\TrainedDataStore", "HarvestContacts", D(0)),
+        ],
+        &[
+            Opt(CU, r"Software\Microsoft\InputPersonalization", "RestrictImplicitTextCollection", D(0)),
+            Opt(CU, r"Software\Microsoft\InputPersonalization", "RestrictImplicitInkCollection", D(0)),
+            Opt(CU, r"Software\Microsoft\InputPersonalization\TrainedDataStore", "HarvestContacts", D(1)),
+        ],
+        Apply, Nothing, 0),
+    t("priv.online_speech", PRIV, "Diagnostics", "Turn off online speech recognition",
+        "Voice typing and speech features use only on-device recognition and don't send your voice to Microsoft.",
+        Some("Voice typing and dictation may stop working or become less accurate."),
+        &[Set(CU, r"Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy", "HasAccepted", D(0))],
+        &[Opt(CU, r"Software\Microsoft\Speech_OneCore\Settings\OnlineSpeechPrivacy", "HasAccepted", D(1))],
+        Either, Nothing, 0),
+    t("priv.error_reporting", PRIV, "Diagnostics", "Turn off Windows Error Reporting",
+        "Crashes are no longer reported to Microsoft, and the 'checking for a solution' step after an app crashes is skipped.",
+        Some("Microsoft can't use your crash reports to find fixes."),
+        &[Set(LM, r"SOFTWARE\Microsoft\Windows\Windows Error Reporting", "Disabled", D(1))],
+        &[Opt(LM, r"SOFTWARE\Microsoft\Windows\Windows Error Reporting", "Disabled", D(0))],
+        Either, Nothing, 0),
+    t("ui.seconds_clock", WIN, "Taskbar", "Show seconds in the taskbar clock", "Adds seconds to the clock in the taskbar.", None,
+        &[Set(CU, ADV, "ShowSecondsInSystemClock", D(1))],
+        &[Opt(CU, ADV, "ShowSecondsInSystemClock", D(0))],
+        Either, Explorer, 22621),
+    t("ui.snap_flyout", WIN, "Windows & snapping", "Hide the snap layouts flyout",
+        "Hovering the maximise button no longer shows snap layouts. Win+Z and dragging to edges still work.", None,
+        &[Set(CU, ADV, "EnableSnapAssistFlyout", D(0))],
+        &[Opt(CU, ADV, "EnableSnapAssistFlyout", D(1))],
+        Either, Nothing, WIN11),
+    t("ui.aero_shake", WIN, "Windows & snapping", "Turn off shake to minimise",
+        "Shaking a window by its title bar no longer minimises every other window.", None,
+        &[Set(CU, ADV, "DisallowShaking", D(1))],
+        &[Del(CU, ADV, "DisallowShaking")],
+        Either, Nothing, 0),
+    t("ui.dark_mode", WIN, "Appearance", "Use dark mode for Windows and apps",
+        "Switches Windows (taskbar, Start) and apps that follow the system theme to dark mode.", None,
+        &[Set(CU, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", D(0)), Set(CU, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "SystemUsesLightTheme", D(0))],
+        &[Opt(CU, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", D(1)), Opt(CU, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "SystemUsesLightTheme", D(1))],
+        Either, Nothing, 0),
+    t("sys.verbose_status", SYS, "Startup and shutdown", "Show detailed status messages",
+        "Startup, shutdown and sign-in screens say what Windows is doing (e.g. 'Applying user settings') instead of only 'Please wait'. Helpful when something hangs.", None,
+        &[Set(LM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "VerboseStatus", D(1))],
+        &[Del(LM, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "VerboseStatus")],
+        Either, Nothing, 0),
+    t("sys.bsod_details", SYS, "Startup and shutdown", "Show technical details on blue screens",
+        "Blue screen (stop error) pages show the error parameters, which helps find the faulty driver.", None,
+        &[Set(LM, r"SYSTEM\CurrentControlSet\Control\CrashControl", "DisplayParameters", D(1))],
+        &[Del(LM, r"SYSTEM\CurrentControlSet\Control\CrashControl", "DisplayParameters")],
         Either, Restart, 0),
 ];
 

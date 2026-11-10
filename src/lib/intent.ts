@@ -16,3 +16,8 @@ export function takeIntent<K extends Intent["kind"]>(kind: K): Extract<Intent, {
   pending = null;
   return i;
 }
+
+/** Looks at a pending intent without consuming it (e.g. to open the right tab first). */
+export function peekIntent<K extends Intent["kind"]>(kind: K): Extract<Intent, { kind: K }> | null {
+  return pending?.kind === kind ? (pending as Extract<Intent, { kind: K }>) : null;
+}

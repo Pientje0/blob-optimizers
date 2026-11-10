@@ -1,4 +1,4 @@
-import { AlertTriangle, RefreshCw, Sparkles } from "lucide-react";
+import { AlertTriangle, RefreshCw, Search, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useEngine } from "../../context/EngineContext";
 import { useSettings } from "../../context/SettingsContext";
@@ -17,12 +17,33 @@ interface Props {
   reload: () => Promise<void>;
   /** Called after a change that needs File Explorer to restart. */
   onExplorerChange: () => void;
+  /** Lay groups out in two columns on wide windows (default true). */
+  columns?: boolean;
+  /** Hide the search/filter toolbar (for short lists). */
+  bare?: boolean;
+}
+
+type Filter = "all" | "applied" | "notApplied" | "recommended";
+const FILTERS: { id: Filter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "notApplied", label: "Not applied" },
+  { id: "applied", label: "Applied" },
+  { id: "recommended", label: "Recommended" },
+];
+
+function matches(t: TweakInfo, q: string, f: Filter) {
+  if (f === "applied" && t.state !== "on") return false;
+  if (f === "notApplied" && t.state === "on") return false;
+  if (f === "recommended" && t.recommend !== "apply") return false;
+  if (!q) return true;
+  const hay = `${t.title} ${t.description} ${t.group}`.toLowerCase();
+  return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
 }
 
 /** Restore point descriptions only allow a safe character set. */
 const RP_DESCRIPTION = "Before applying recommended tweaks";
 
-export function TweakPanel({ tweaks, reload, onExplorerChange }: Props) {
+export function TweakPanel({ tweaks, reload, onExplorerChange, columns = true, bare = false }: Props) {
   const { runOperation, waitFor } = useEngine();
   const { appInfo } = useSystem();
   const toast = useToast();
@@ -33,11 +54,14 @@ export function TweakPanel({ tweaks, reload, onExplorerChange }: Props) {
   const [restorePoint, setRestorePoint] = useState(settings.restorePointDefault);
   const [batchBusy, setBatchBusy] = useState(false);
 
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+
   const groups = useMemo(() => {
     const m = new Map<string, TweakInfo[]>();
-    (tweaks ?? []).forEach((t) => m.set(t.group, [...(m.get(t.group) ?? []), t]));
+    (tweaks ?? []).filter((t) => matches(t, query.trim(), filter)).forEach((t) => m.set(t.group, [...(m.get(t.group) ?? []), t]));
     return [...m.entries()];
-  }, [tweaks]);
+  }, [tweaks, query, filter]);
 
   const recommended = (tweaks ?? []).filter((t) => t.recommend === "apply" && t.state !== "on");
 
@@ -98,29 +122,63 @@ export function TweakPanel({ tweaks, reload, onExplorerChange }: Props) {
   }
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="flex-1 text-sm text-muted">
-          {tweaks.filter((t) => t.state === "on").length} of {tweaks.length} applied · every change can be reset to the Windows default or undone.
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {!bare && (
+          <>
+            <div className="relative">
+              <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search tweaks"
+                aria-label="Search tweaks"
+                className="w-52 rounded-xl border border-line bg-base/60 py-1.5 pl-8 pr-3 text-[13px] outline-none placeholder:text-muted focus:border-accent/60"
+              />
+            </div>
+            <div className="flex rounded-xl border border-line bg-base/60 p-0.5 text-xs">
+              {FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => setFilter(f.id)}
+                  className={`rounded-[10px] px-2.5 py-1 font-medium ${filter === f.id ? "bg-raised text-fg" : "text-muted hover:text-fg"}`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        <p className="flex-1 text-xs text-muted">
+          {tweaks.filter((t) => t.state === "on").length} of {tweaks.length} applied · every change can be reset or undone
         </p>
         <button className="btn-ghost px-3 py-1.5 text-xs" onClick={reload}>
           <RefreshCw size={13} /> Refresh
         </button>
-        <button className="btn-primary" disabled={!recommended.length || !!busy} onClick={() => setBatch(recommended)}>
-          <Sparkles size={15} /> Apply recommended ({recommended.length})
+        <button className="btn-primary px-3 py-1.5 text-xs" disabled={!recommended.length || !!busy} onClick={() => setBatch(recommended)}>
+          <Sparkles size={14} /> Apply recommended ({recommended.length})
         </button>
       </div>
 
-      {groups.map(([group, items]) => (
-        <section key={group} className="card animate-fade-up overflow-hidden">
-          <header className="border-b border-line/50 px-5 py-3 text-[13.5px] font-semibold">{group}</header>
-          <div className="divide-y divide-line/40">
-            {items.map((t) => (
-              <TweakRow key={t.id} tweak={t} busy={busy === t.id} disabled={!!busy || batchBusy} onChange={request} />
-            ))}
-          </div>
-        </section>
-      ))}
+      {groups.length === 0 && <p className="card px-5 py-8 text-center text-[13px] text-muted">No tweaks match{query ? ` "${query}"` : " this filter"}.</p>}
+
+      <div className={columns ? "gap-4 xl:columns-2 [&>section]:mb-4 [&>section]:break-inside-avoid" : "space-y-4"}>
+        {groups.map(([group, items]) => (
+          <section key={group} className="card animate-fade-up overflow-hidden">
+            <header className="flex items-center justify-between border-b border-line/50 px-4 py-2.5">
+              <span className="text-[13px] font-semibold">{group}</span>
+              <span className="text-[11px] tabular-nums text-muted">
+                {items.filter((t) => t.state === "on").length}/{items.length}
+              </span>
+            </header>
+            <div className="divide-y divide-line/40">
+              {items.map((t) => (
+                <TweakRow key={t.id} tweak={t} busy={busy === t.id} disabled={!!busy || batchBusy} onChange={request} />
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
 
       <Modal
         open={!!confirm}

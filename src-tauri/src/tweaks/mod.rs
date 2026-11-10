@@ -35,6 +35,8 @@ pub struct TweakInfo {
     /// The current state is what Windows ships with.
     pub at_default: bool,
     pub default_on: bool,
+    /// Also shown in the Latency sections.
+    pub latency: bool,
     /// Exact changes, shown under "Details".
     pub changes_on: Vec<String>,
     pub changes_off: Vec<String>,
@@ -70,6 +72,9 @@ enum Saved {
     Value { hive: Hive, path: String, name: String, data: Option<RegData> },
     Key { hive: Hive, path: String, existed: bool },
     Service { name: String, start: Option<u32> },
+    /// Command-backed settings can't be read back value by value: the tweak's state is kept instead and
+    /// undo re-applies that state's command list.
+    Tweak { id: String, state: State },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,11 +96,13 @@ fn snapshot(t: &Tweak) -> Snapshot {
                 name: name.into(),
                 start: model::service_start(name).map(StartType::registry_value),
             },
+            Op::Cmd(_) => Saved::Tweak { id: t.id.into(), state: t.state() },
         };
         let dup = entries.iter().any(|x: &Saved| match (x, &e) {
             (Saved::Value { hive: a, path: b, name: c, .. }, Saved::Value { hive: d, path: f, name: g, .. }) => a == d && b == f && c == g,
             (Saved::Key { hive: a, path: b, .. }, Saved::Key { hive: d, path: f, .. }) => a == d && b == f,
             (Saved::Service { name: a, .. }, Saved::Service { name: b, .. }) => a == b,
+            (Saved::Tweak { .. }, Saved::Tweak { .. }) => true,
             _ => false,
         });
         if !dup {
@@ -125,7 +132,29 @@ fn restore_script(s: &Snapshot) -> String {
             _ => {}
         }
     }
+    for e in &s.entries {
+        if let Saved::Tweak { id, state } = e {
+            let t = catalog::find(id);
+            let ops: &[Op] = match (t, state) {
+                (Some(t), State::On) => t.on,
+                (Some(t), State::Off) => t.off,
+                _ => &[],
+            };
+            let cmds: String = ops.iter().filter(|o| matches!(o, Op::Cmd(_))).map(Op::script).collect();
+            if cmds.is_empty() {
+                out.push_str("'  This setting was customised before; it cannot be restored exactly. Use Reset to default instead.'\n");
+            } else {
+                out.push_str(&cmds);
+            }
+        }
+    }
     out
+}
+
+/// Reads command-backed settings (network adapters, power plan, …) so `state()` is current.
+pub fn refresh_states() {
+    let cmds: Vec<&'static model::Cmd> = catalog::TWEAKS.iter().flat_map(|t| t.cmds()).collect();
+    model::refresh_cmd_states(&cmds);
 }
 
 pub struct Tweaks {
@@ -152,10 +181,11 @@ impl Tweaks {
     }
 
     pub fn list(&self) -> Vec<TweakInfo> {
+        refresh_states();
         let backups = self.backups.lock().map(|b| b.clone()).unwrap_or_default();
         catalog::TWEAKS
             .iter()
-            .filter(|t| self.supported(t))
+            .filter(|t| self.supported(t) && t.available())
             .map(|t| {
                 let state = t.state();
                 TweakInfo {
@@ -171,6 +201,7 @@ impl Tweaks {
                 state,
                 at_default: state == t.default_state(),
                 default_on: t.default_on,
+                latency: t.latency,
                 changes_on: t.on.iter().map(Op::describe).collect(),
                 changes_off: t.off.iter().map(Op::describe).collect(),
                 can_undo: backups.get(t.id).is_some_and(|v| !v.is_empty()),
@@ -187,12 +218,13 @@ impl Tweaks {
         let backups = self.backups.lock().map(|b| b.clone()).unwrap_or_default();
         let mut script = String::from("$failed = 0\n");
         let mut admin = false;
+        refresh_states();
         let mut snapshots: Vec<(String, Snapshot)> = Vec::new();
         let mut undone: Vec<String> = Vec::new();
         let total = changes.len();
 
         for (i, c) in changes.iter().enumerate() {
-            let t = catalog::find(&c.id).filter(|t| self.supported(t)).ok_or_else(|| AppError::Other(format!("Unknown tweak '{}'", c.id)))?;
+            let t = catalog::find(&c.id).filter(|t| self.supported(t) && (t.cmds().next().is_none() || t.available())).ok_or_else(|| AppError::Other(format!("Unknown tweak '{}'", c.id)))?;
             admin |= t.needs_admin();
             let (verb, body) = match c.target {
                 Target::On => ("Applying", t.on.iter().map(Op::script).collect::<String>()),
@@ -238,6 +270,7 @@ impl Tweaks {
         req.timeout = Duration::from_secs(10 * 60);
         req.on_complete = Some(Callback(Arc::new(move |entry| {
             // Snapshots are kept even when some tweaks failed: they record the state before this attempt.
+            model::invalidate_cmd_cache();
             if entry.status == JobStatus::Declined || entry.status == JobStatus::Cancelled {
                 return;
             }

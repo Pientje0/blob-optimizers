@@ -37,6 +37,8 @@ pub fn run() {
             let base = app.path().app_local_data_dir()?;
             app.manage(Arc::new(apps::Apps::new(base.join("apps"))));
             let tweaks = Arc::new(tweaks::Tweaks::new(base.join("tweaks")));
+            // Read network-adapter and power-plan settings in the background so tweak pages open instantly.
+            std::thread::spawn(tweaks::refresh_states);
             app.manage(tweaks.clone());
             app.manage(Arc::new(gaming::Gaming::new(tweaks, base.join("gaming"))));
             app.manage(Arc::new(gaming::games::Games::new(base.join("gaming"))));

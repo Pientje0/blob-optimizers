@@ -113,7 +113,7 @@ export function PresetsSection({ presets, last, reload }: Props) {
             })}
       </div>
       <p className="text-xs text-muted">
-        Presets change Windows settings and the power plan only. No preset promises a specific FPS gain: measure with the FPS monitor below before and after.
+        Presets change Windows settings and the power plan only. No preset promises a specific FPS gain: measure with the FPS monitor (FPS &amp; performance tab) before and after.
       </p>
 
       <Modal
