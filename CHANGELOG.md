@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- **Blob Optimizers now runs as a single readable PowerShell script** (`blob.ps1`), run with `irm .../blob.ps1 | iex` — nothing compiled or installed. This is the recommended way to run it; the earlier Tauri desktop app stays in the repo and in the 0.1-0.2 releases.
+- Menu-driven: Performance, Latency, Gaming, Privacy and Interface tweaks (26), a Debloat list (20 safe Store apps), power plans and a one-click restore point.
+- Every tweak is plain registry/service edits shown in the file; applied tweaks can be reverted to the Windows default from the same menu. Nothing touches Microsoft Defender, the firewall or Windows Update.
+
 ## 0.2.0
 
 - **Latency section** in three places: Gaming › Latency, Network › Latency & tweaks and Windows Tweaks › Latency. It lists every input, scheduling, power and network latency setting with a ping test.

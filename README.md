@@ -2,15 +2,21 @@
 
 All-in-one Windows PC & gaming optimization suite. Tauri 2 (Rust) + React + TypeScript + Tailwind + Recharts + Lucide.
 
-## Install with one command
+## Run it (one command, no install)
 
-Open PowerShell and run:
+Blob Optimizers now runs as a single, readable PowerShell script — nothing is compiled or installed. Open **PowerShell** and run:
 
 ```powershell
-irm https://raw.githubusercontent.com/Pientje09-abe/blob-optimizers/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Pientje09-abe/blob-optimizers/main/blob.ps1 | iex
 ```
 
-This downloads the latest release to `%LOCALAPPDATA%\Programs\Blob Optimizers Portable`, checks its SHA-256 against the release, adds a Start menu shortcut and starts it. No administrator rights are needed to install; run the same command again to update. Prefer an installer? Download the `setup.exe` or `.msi` from [Releases](https://github.com/Pientje09-abe/blob-optimizers/releases/latest).
+It asks for administrator rights, then shows a menu: Performance, Latency, Gaming, Privacy and Interface tweaks, a Debloat list, power plans and a one-click restore point. Applied tweaks show `[x]`; pick one again to put the Windows default back. Every change is plain registry/service edits you can read in [`blob.ps1`](blob.ps1); it never touches Microsoft Defender, the firewall or Windows Update.
+
+> Why a script? It's open text an antivirus (and you) can read line by line, like other Windows tweak scripts — unlike an unknown compiled `.exe`, which new tools get wrongly flagged for until they're signed and widely downloaded.
+
+### The desktop app (earlier versions)
+
+Blob Optimizers started as a Tauri desktop app (dashboard, live monitoring, more tweaks). That code is still in this repo under `src/` and `src-tauri/` and in the 0.1–0.2 releases, but the script above is now the recommended way to run it.
 
 ## Run from source
 
