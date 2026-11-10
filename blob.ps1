@@ -22,7 +22,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$script:Version = '0.4.0'
+$script:Version = '0.4.1'
 
 # ------------------------------------------------------------------ helpers ---
 
@@ -383,13 +383,53 @@ function Show-Menu {
     }
 }
 
-# --------------------------------------------------------------------- main ---
-
 # ----------------------------------------------------------------- window ---
-# A graphical window (WPF): category sidebar on the left, one check-box per tweak on the right.
-# A ticked box = the tweak is applied right now. Tick/untick then "Apply changes" to make it so.
+# A graphical window (WPF) styled like the old app: a grouped sidebar, a page header per
+# section, tweaks laid out in rounded cards, and a toggle switch per tweak (on = applied now).
 
 $script:Categories = @('Performance', 'Latency', 'Gaming', 'Privacy', 'Interface', 'Debloat')
+
+# Sidebar sections (label -> categories under it).
+$script:NavGroups = [ordered]@{
+    'OPTIMIZE'  = @('Performance', 'Latency', 'Gaming')
+    'CUSTOMISE' = @('Privacy', 'Interface')
+    'APPS'      = @('Debloat')
+}
+
+# One short line under each page title.
+$script:Subtitles = @{
+    Performance = 'Speed up startup, visuals and background activity.'
+    Latency     = 'Lower input and network delay for games.'
+    Gaming      = 'Game Mode, recording and GPU scheduling.'
+    Privacy     = 'Limit tracking, ads and diagnostics.'
+    Interface   = 'File Explorer, taskbar and appearance.'
+    Debloat     = "Remove preinstalled Store apps you don't use."
+}
+
+# Card grouping inside a page (tweak Id -> card heading), like the app's grouped cards.
+$script:Groups = @{
+    startup_delay = 'Startup'; menu_delay = 'Visual effects'; taskbar_anim = 'Visual effects'; transparency = 'Visual effects'
+    background_apps = 'Background activity'; power_throttling = 'Background activity'; sysmain = 'Background activity'
+    mouse_accel = 'Input'; priority_sep = 'Scheduling'; system_resp = 'Scheduling'; net_throttle = 'Scheduling'; games_priority = 'Scheduling'
+    game_mode = 'Game features'; no_dvr = 'Game features'; hags = 'Game features'; gamebar_tips = 'Game features'
+    ad_id = 'Advertising'; start_suggestions = 'Advertising'; tailored = 'Diagnostics'; activity = 'Diagnostics'; web_search = 'Search'
+    file_ext = 'File Explorer'; hidden_files = 'File Explorer'; taskbar_left = 'Taskbar'; end_task = 'Taskbar'; dark_mode = 'Appearance'
+}
+
+function Switch-GuiCat($cat) {
+    $script:GuiCurrent = $cat
+    foreach ($k in $script:GuiPanels.Keys) {
+        $script:GuiPanels[$k].Visibility = if ($k -eq $cat) { 'Visible' } else { 'Collapsed' }
+    }
+    foreach ($k in $script:GuiNav.Keys) {
+        $b = $script:GuiNav[$k]
+        if ($k -eq $cat) {
+            $b.Background = '#1b1b27'; $b.Foreground = '#ffffff'
+        } else {
+            $b.Background = 'Transparent'; $b.Foreground = '#9a9aab'
+        }
+    }
+}
 
 function New-BlobWindow {
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
@@ -397,59 +437,78 @@ function New-BlobWindow {
     $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Blob Optimizers" Height="720" Width="1040" WindowStartupLocation="CenterScreen"
-        Background="#0b0b10" FontFamily="Segoe UI" TextOptions.TextFormattingMode="Display">
+        Title="Blob Optimizers" Height="740" Width="1060" MinWidth="900" MinHeight="600"
+        WindowStartupLocation="CenterScreen" Background="#0b0b10" FontFamily="Segoe UI"
+        TextOptions.TextFormattingMode="Display">
   <Window.Resources>
     <Style TargetType="Button">
       <Setter Property="Background" Value="#1a1a24"/>
       <Setter Property="Foreground" Value="#e8e8ef"/>
-      <Setter Property="BorderBrush" Value="#2a2a38"/>
-      <Setter Property="Padding" Value="14,7"/>
-      <Setter Property="Margin" Value="6,0,0,0"/>
+      <Setter Property="Padding" Value="15,8"/>
+      <Setter Property="Margin" Value="7,0,0,0"/>
       <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="FontSize" Value="12.5"/>
       <Setter Property="Template">
         <Setter.Value>
           <ControlTemplate TargetType="Button">
-            <Border Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            <Border Background="{TemplateBinding Background}" CornerRadius="9" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
             </Border>
           </ControlTemplate>
         </Setter.Value>
       </Setter>
     </Style>
     <Style x:Key="Accent" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Background" Value="#7c5cff"/>
-      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="Background" Value="#7c5cff"/><Setter Property="Foreground" Value="White"/>
     </Style>
     <Style x:Key="Nav" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-      <Setter Property="Background" Value="Transparent"/>
-      <Setter Property="Foreground" Value="#9a9aab"/>
-      <Setter Property="Margin" Value="8,2"/>
-      <Setter Property="Padding" Value="12,9"/>
-      <Setter Property="HorizontalContentAlignment" Value="Left"/>
+      <Setter Property="Background" Value="Transparent"/><Setter Property="Foreground" Value="#9a9aab"/>
+      <Setter Property="Margin" Value="10,2"/><Setter Property="Padding" Value="13,10"/>
+      <Setter Property="FontSize" Value="13"/><Setter Property="HorizontalContentAlignment" Value="Left"/>
     </Style>
-    <Style TargetType="CheckBox">
-      <Setter Property="Foreground" Value="#e8e8ef"/>
-      <Setter Property="Margin" Value="0,7"/>
-      <Setter Property="FontSize" Value="13"/>
+    <Style x:Key="Toggle" TargetType="CheckBox">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Border x:Name="track" Width="42" Height="24" CornerRadius="12" Background="#2b2b3a">
+              <Ellipse x:Name="thumb" Width="18" Height="18" Fill="#d8d8e2" HorizontalAlignment="Left" Margin="3,0,0,0"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="track" Property="Background" Value="#7c5cff"/>
+                <Setter TargetName="thumb" Property="Fill" Value="White"/>
+                <Setter TargetName="thumb" Property="HorizontalAlignment" Value="Right"/>
+                <Setter TargetName="thumb" Property="Margin" Value="0,0,3,0"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="track" Property="Opacity" Value="0.35"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
   </Window.Resources>
   <Grid>
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-    <Border Grid.Row="0" Background="#111119" Padding="18,14">
+    <Border Grid.Row="0" Background="#111119" Padding="20,15" BorderBrush="#1c1c26" BorderThickness="0,0,0,1">
       <StackPanel Orientation="Horizontal">
-        <TextBlock Text="BLOB OPTIMIZERS" Foreground="#b48cff" FontSize="17" FontWeight="Bold"/>
-        <TextBlock x:Name="Sub" Foreground="#6b6b7b" FontSize="12" VerticalAlignment="Bottom" Margin="10,0,0,2"/>
+        <TextBlock Text="BLOB" Foreground="#b48cff" FontSize="17" FontWeight="Bold"/>
+        <TextBlock Text=" OPTIMIZERS" Foreground="#e8e8ef" FontSize="17" FontWeight="Bold"/>
+        <TextBlock x:Name="Sub" Foreground="#5d5d6b" FontSize="12" VerticalAlignment="Bottom" Margin="10,0,0,2"/>
       </StackPanel>
     </Border>
     <Grid Grid.Row="1">
-      <Grid.ColumnDefinitions><ColumnDefinition Width="196"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-      <Border Grid.Column="0" Background="#0e0e16"><StackPanel x:Name="Nav" Margin="0,10"/></Border>
-      <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="22,16">
-        <StackPanel x:Name="Body"/>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="210"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Border Grid.Column="0" Background="#0d0d14" BorderBrush="#1a1a24" BorderThickness="0,0,1,0">
+        <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel x:Name="Nav" Margin="0,14"/></ScrollViewer>
+      </Border>
+      <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Padding="24,20">
+        <StackPanel x:Name="Body" MaxWidth="760" HorizontalAlignment="Left"/>
       </ScrollViewer>
     </Grid>
-    <Border Grid.Row="2" Background="#111119" Padding="14">
+    <Border Grid.Row="2" Background="#111119" Padding="16,12" BorderBrush="#1c1c26" BorderThickness="0,1,0,0">
       <Grid>
         <TextBlock x:Name="Status" Foreground="#6b6b7b" FontSize="12" VerticalAlignment="Center"/>
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
@@ -466,84 +525,139 @@ function New-BlobWindow {
     $win = [Windows.Markup.XamlReader]::Load((New-Object System.Xml.XmlNodeReader ([xml]$xaml)))
     $find = { param($n) $win.FindName($n) }
     $nav = & $find 'Nav'; $body = & $find 'Body'
-    (& $find 'Sub').Text = "Windows optimization  .  v$script:Version"
+    (& $find 'Sub').Text = "v$script:Version"
 
-    # Per-category content panels (built once, shown one at a time) and their check boxes.
-    $panels = @{}
-    $script:GuiBoxes = @{}   # tweak Id  -> CheckBox
-    $script:GuiDebloat = @{} # appx Id   -> CheckBox
+    $toggleStyle = $win.FindResource('Toggle')
+
+    # Small TextBlock factory.
+    $TB = {
+        param($text, $fg = '#e8e8ef', $size = 13, $bold = $false, $wrap = $false)
+        $x = New-Object Windows.Controls.TextBlock
+        $x.Text = $text; $x.Foreground = $fg; $x.FontSize = $size
+        if ($bold) { $x.FontWeight = 'SemiBold' }
+        if ($wrap) { $x.TextWrapping = 'Wrap' }
+        $x
+    }
+
+    # One rounded card with a heading and a set of rows.
+    $NewCard = {
+        param($heading)
+        $card = New-Object Windows.Controls.Border
+        $card.Background = '#111119'; $card.CornerRadius = 14; $card.Margin = '0,0,0,14'
+        $card.BorderBrush = '#1b1b26'; $card.BorderThickness = 1
+        $stack = New-Object Windows.Controls.StackPanel
+        $card.Child = $stack
+        if ($heading) {
+            $hb = New-Object Windows.Controls.Border
+            $hb.Padding = '16,11'; $hb.BorderBrush = '#1d1d28'; $hb.BorderThickness = '0,0,0,1'
+            $hb.Child = (& $TB $heading '#cfcfe0' 12.5 $true)
+            [void]$stack.Children.Add($hb)
+        }
+        [pscustomobject]@{ Card = $card; Stack = $stack }
+    }
+
+    # One row: left = name/description/caveat, right = toggle switch.
+    $AddRow = {
+        param($stack, $left, $toggle, $divider)
+        $rb = New-Object Windows.Controls.Border
+        $rb.Padding = '16,12'
+        if ($divider) { $rb.BorderBrush = '#17171f'; $rb.BorderThickness = '0,0,0,1' }
+        $g = New-Object Windows.Controls.Grid
+        $c0 = New-Object Windows.Controls.ColumnDefinition; $c0.Width = '*'
+        $c1 = New-Object Windows.Controls.ColumnDefinition; $c1.Width = 'Auto'
+        $g.ColumnDefinitions.Add($c0); $g.ColumnDefinitions.Add($c1)
+        [Windows.Controls.Grid]::SetColumn($left, 0)
+        [Windows.Controls.Grid]::SetColumn($toggle, 1)
+        $toggle.VerticalAlignment = 'Center'; $toggle.Margin = '14,0,0,0'
+        [void]$g.Children.Add($left); [void]$g.Children.Add($toggle)
+        $rb.Child = $g
+        [void]$stack.Children.Add($rb)
+    }
+
+    $script:GuiPanels = @{}
+    $script:GuiNav = @{}
+    $script:GuiBoxes = @{}    # tweak Id -> toggle
+    $script:GuiDebloat = @{}  # appx Id  -> toggle
 
     foreach ($cat in $script:Categories) {
         $panel = New-Object Windows.Controls.StackPanel
         $panel.Visibility = 'Collapsed'
-        $intro = New-Object Windows.Controls.TextBlock
-        $intro.Foreground = '#8a8a9a'; $intro.FontSize = 12; $intro.Margin = '0,0,0,10'; $intro.TextWrapping = 'Wrap'
-        $intro.Text = if ($cat -eq 'Debloat') {
-            'Tick the apps you want to remove, then Apply changes. Only safe, user-facing Store apps are listed.'
-        } else {
-            'A ticked box means the tweak is applied now. Tick or untick, then Apply changes. Everything is reversible.'
-        }
-        [void]$panel.Children.Add($intro)
+        [void]$panel.Children.Add((& $TB $cat '#f1f1f6' 21 $true))
+        $st = & $TB $script:Subtitles[$cat] '#8a8a9a' 13 $false $true
+        $st.Margin = '0,3,0,16'
+        [void]$panel.Children.Add($st)
 
         if ($cat -eq 'Debloat') {
-            foreach ($id in ($script:DebloatList | Sort-Object)) {
-                if (-not (Get-AppxPackage -Name $id -ErrorAction SilentlyContinue)) { continue }
-                $cb = New-Object Windows.Controls.CheckBox
-                $cb.Content = ($id -replace '^Microsoft\.', ''); $cb.Tag = $id
-                $script:GuiDebloat[$id] = $cb
-                [void]$panel.Children.Add($cb)
+            $c = & $NewCard 'Removable apps'
+            $apps = @($script:DebloatList | Sort-Object | Where-Object { Get-AppxPackage -Name $_ -ErrorAction SilentlyContinue })
+            if (-not $apps.Count) {
+                $empty = & $TB 'None of the removable apps are installed.' '#5bd38a' 13
+                $empty.Margin = '16,12'
+                [void]$c.Stack.Children.Add($empty)
             }
-            if ($panel.Children.Count -eq 1) {
-                $none = New-Object Windows.Controls.TextBlock
-                $none.Text = 'None of the removable apps are installed.'; $none.Foreground = '#5bd38a'
-                [void]$panel.Children.Add($none)
+            for ($i = 0; $i -lt $apps.Count; $i++) {
+                $id = $apps[$i]
+                $left = & $TB ($id -replace '^Microsoft\.', '') '#e8e8ef' 13.5
+                $tg = New-Object Windows.Controls.CheckBox; $tg.Style = $toggleStyle; $tg.Tag = $id
+                $script:GuiDebloat[$id] = $tg
+                & $AddRow $c.Stack $left $tg ($i -lt $apps.Count - 1)
             }
+            [void]$panel.Children.Add($c.Card)
         } else {
-            foreach ($t in $script:Tweaks | Where-Object Cat -eq $cat) {
-                $cb = New-Object Windows.Controls.CheckBox
-                $cb.Tag = $t
-                $cb.IsChecked = [bool](Test-Applied $t)
-                $head = if ($t.Rec) { "$($t.Name)   (recommended)" } else { $t.Name }
-                $sp = New-Object Windows.Controls.StackPanel
-                $tb = New-Object Windows.Controls.TextBlock; $tb.Text = $head; $tb.Foreground = '#e8e8ef'
-                $db = New-Object Windows.Controls.TextBlock
-                $db.Text = $t.Desc; $db.Foreground = '#7a7a8a'; $db.FontSize = 11.5; $db.TextWrapping = 'Wrap'
-                [void]$sp.Children.Add($tb); [void]$sp.Children.Add($db)
-                if ($t.Caveat) {
-                    $cv = New-Object Windows.Controls.TextBlock
-                    $cv.Text = "Note: $($t.Caveat)"; $cv.Foreground = '#d9a441'; $cv.FontSize = 11; $cv.TextWrapping = 'Wrap'
-                    [void]$sp.Children.Add($cv)
+            $items = @($script:Tweaks | Where-Object Cat -eq $cat)
+            $order = @(); foreach ($t in $items) { $g = $script:Groups[$t.Id]; if ($order -notcontains $g) { $order += $g } }
+            foreach ($grp in $order) {
+                $rows = @($items | Where-Object { $script:Groups[$_.Id] -eq $grp })
+                $c = & $NewCard $grp
+                for ($i = 0; $i -lt $rows.Count; $i++) {
+                    $t = $rows[$i]
+                    $left = New-Object Windows.Controls.StackPanel
+                    $nameRow = New-Object Windows.Controls.StackPanel; $nameRow.Orientation = 'Horizontal'
+                    [void]$nameRow.Children.Add((& $TB $t.Name '#e8e8ef' 13.5 $true))
+                    if ($t.Rec) {
+                        $pill = New-Object Windows.Controls.Border
+                        $pill.Background = '#241f3a'; $pill.CornerRadius = 6; $pill.Padding = '6,1'; $pill.Margin = '8,1,0,0'; $pill.VerticalAlignment = 'Center'
+                        $pill.Child = (& $TB 'Recommended' '#b48cff' 10.5)
+                        [void]$nameRow.Children.Add($pill)
+                    }
+                    [void]$left.Children.Add($nameRow)
+                    $d = & $TB $t.Desc '#7c7c8c' 11.5 $false $true; $d.Margin = '0,2,0,0'
+                    [void]$left.Children.Add($d)
+                    if ($t.Caveat) {
+                        $cv = & $TB "Note: $($t.Caveat)" '#d9a441' 11 $false $true; $cv.Margin = '0,3,0,0'
+                        [void]$left.Children.Add($cv)
+                    }
+                    $tg = New-Object Windows.Controls.CheckBox; $tg.Style = $toggleStyle; $tg.Tag = $t
+                    $tg.IsChecked = [bool](Test-Applied $t)
+                    $script:GuiBoxes[$t.Id] = $tg
+                    & $AddRow $c.Stack $left $tg ($i -lt $rows.Count - 1)
                 }
-                $cb.Content = $sp
-                $script:GuiBoxes[$t.Id] = $cb
-                [void]$panel.Children.Add($cb)
+                [void]$panel.Children.Add($c.Card)
             }
         }
-        $panels[$cat] = $panel
+        $script:GuiPanels[$cat] = $panel
         [void]$body.Children.Add($panel)
     }
 
-    # Sidebar navigation: show one category panel at a time.
-    $script:GuiCurrent = $script:Categories[0]
-    $show = {
-        param($cat)
-        $script:GuiCurrent = $cat
-        foreach ($k in $panels.Keys) { $panels[$k].Visibility = if ($k -eq $cat) { 'Visible' } else { 'Collapsed' } }
+    # Sidebar: section labels + category buttons.
+    foreach ($section in $script:NavGroups.Keys) {
+        $lbl = & $TB $section '#55556a' 11 $true
+        $lbl.Margin = '20,14,0,4'
+        [void]$nav.Children.Add($lbl)
+        foreach ($cat in $script:NavGroups[$section]) {
+            $b = New-Object Windows.Controls.Button
+            $b.Content = $cat; $b.Style = $win.FindResource('Nav'); $b.Tag = $cat
+            $b.Add_Click({ Switch-GuiCat $this.Tag })
+            $script:GuiNav[$cat] = $b
+            [void]$nav.Children.Add($b)
+        }
     }
-    foreach ($cat in $script:Categories) {
-        $b = New-Object Windows.Controls.Button
-        $b.Content = $cat; $b.Style = $win.FindResource('Nav'); $b.Tag = $cat
-        $b.Add_Click({ & $show $this.Tag }.GetNewClosure())
-        [void]$nav.Children.Add($b)
-    }
-    & $show $script:GuiCurrent
+
+    Switch-GuiCat $script:Categories[0]
 
     [pscustomobject]@{
-        Window      = $win
-        Status      = (& $find 'Status')
-        BtnApply    = (& $find 'BtnApply')
-        BtnRec      = (& $find 'BtnRecommended')
-        BtnRestore  = (& $find 'BtnRestore')
+        Window = $win; Status = (& $find 'Status')
+        BtnApply = (& $find 'BtnApply'); BtnRec = (& $find 'BtnRecommended'); BtnRestore = (& $find 'BtnRestore')
     }
 }
 
@@ -551,11 +665,13 @@ function Show-Gui {
     $ui = New-BlobWindow
 
     $ui.BtnRec.Add_Click({
-        if ($script:GuiCurrent -eq 'Debloat') { return }
+        if ($script:GuiCurrent -eq 'Debloat') { $ui.Status.Text = 'No recommendations for app removal.'; return }
+        $n = 0
         foreach ($t in $script:Tweaks | Where-Object Cat -eq $script:GuiCurrent) {
-            if ($t.Rec) { $script:GuiBoxes[$t.Id].IsChecked = $true }
+            if ($t.Rec -and -not $script:GuiBoxes[$t.Id].IsChecked) { $script:GuiBoxes[$t.Id].IsChecked = $true; $n++ }
         }
-    })
+        $ui.Status.Text = "Ticked $n recommended tweak(s). Click Apply changes to make them."
+    }.GetNewClosure())
 
     $ui.BtnRestore.Add_Click({
         $ui.Status.Text = 'Creating restore point...'
@@ -566,18 +682,18 @@ function Show-Gui {
         } catch {
             $ui.Status.Text = 'Could not create a restore point (System Protection may be off).'
         }
-    })
+    }.GetNewClosure())
 
     $ui.BtnApply.Add_Click({
         $cat = $script:GuiCurrent
         if ($cat -eq 'Debloat') {
-            $remove = $script:GuiDebloat.Values | Where-Object { $_.IsChecked }
-            if (-not $remove) { $ui.Status.Text = 'Nothing ticked to remove.'; return }
-            if ([Windows.MessageBox]::Show("Remove $($remove.Count) app(s)? This can't be undone from here (reinstall from the Store).",
+            $remove = @($script:GuiDebloat.Values | Where-Object { $_.IsChecked })
+            if (-not $remove.Count) { $ui.Status.Text = 'Nothing ticked to remove.'; return }
+            if ([Windows.MessageBox]::Show("Remove $($remove.Count) app(s)? Reinstall from the Microsoft Store if you change your mind.",
                     'Confirm', 'YesNo', 'Warning') -ne 'Yes') { return }
             $done = 0
             foreach ($cb in $remove) {
-                try { Get-AppxPackage -Name $cb.Tag -EA SilentlyContinue | Remove-AppxPackage -EA Stop; $cb.IsEnabled = $false; $cb.IsChecked = $false; $done++ } catch {}
+                try { Get-AppxPackage -Name $cb.Tag -EA SilentlyContinue | Remove-AppxPackage -EA Stop; $cb.IsChecked = $false; $cb.IsEnabled = $false; $done++ } catch {}
             }
             $ui.Status.Text = "Removed $done app(s)."
             return
@@ -588,17 +704,17 @@ function Show-Gui {
             $now = [bool](Test-Applied $t)
             if ($want -and -not $now) { $toApply += $t } elseif (-not $want -and $now) { $toRevert += $t }
         }
-        if (-not $toApply -and -not $toRevert) { $ui.Status.Text = 'No changes in this section.'; return }
+        if (-not $toApply.Count -and -not $toRevert.Count) { $ui.Status.Text = 'No changes in this section.'; return }
         if ([Windows.MessageBox]::Show("Apply $($toApply.Count) and revert $($toRevert.Count) tweak(s) in $cat?",
                 'Confirm', 'YesNo', 'Question') -ne 'Yes') { return }
         foreach ($t in $toApply) { try { Set-Tweak $t } catch {} }
         foreach ($t in $toRevert) { try { Set-Tweak $t -Revert } catch {} }
         foreach ($t in $script:Tweaks | Where-Object Cat -eq $cat) { $script:GuiBoxes[$t.Id].IsChecked = [bool](Test-Applied $t) }
         $ui.Status.Text = "Applied $($toApply.Count), reverted $($toRevert.Count). Some changes need a sign-out or restart."
-    })
+    }.GetNewClosure())
 
     if ($SelfTest) {
-        Write-Host "GUI built: $($script:GuiBoxes.Count) tweak boxes, $($script:GuiDebloat.Count) debloat boxes." -ForegroundColor Green
+        Write-Host "GUI built: $($script:GuiBoxes.Count) tweak toggles, $($script:GuiDebloat.Count) debloat toggles, $($script:GuiPanels.Count) panels." -ForegroundColor Green
         $ui.Window.Close()
         return
     }

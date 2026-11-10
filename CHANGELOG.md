@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Fixed the sidebar: clicking a category now switches the page (a closure bug left the click with no target).
+- Redesigned the window to match the old app: a grouped sidebar (Optimise / Customise / Apps), a page title and subtitle, tweaks laid out in rounded cards by group, toggle switches instead of checkboxes, and a "Recommended" badge. The active category is highlighted.
+
 ## 0.4.0
 
 - **Graphical window** (`blob.ps1`): a category sidebar and a checkbox per tweak, where a ticked box means the tweak is applied now. Tick/untick and "Apply changes" (per category, with a confirmation); "Select recommended" and "Create restore point" buttons; a Debloat tab that ticks apps to remove. Its own dark design, built with WPF.
