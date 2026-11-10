@@ -13,7 +13,7 @@ use crate::util::registry::{self, Hive};
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "Blob Optimizers";
 /// Where official releases are published.
-pub const DEFAULT_UPDATE_REPO: &str = "Pientje09-abe/blob-optimizers";
+pub const DEFAULT_UPDATE_REPO: &str = "Pientje0/blob-optimizers";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]

@@ -15,7 +15,7 @@ const DEFAULTS: Settings = {
   defaultPreset: "gaming",
   language: "en",
   checkUpdates: true,
-  updateRepo: "Pientje09-abe/blob-optimizers",
+  updateRepo: "Pientje0/blob-optimizers",
   startWithWindows: false,
 };
 

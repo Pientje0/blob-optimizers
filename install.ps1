@@ -1,6 +1,6 @@
 # Blob Optimizers launcher / installer.
 #
-#   irm https://raw.githubusercontent.com/Pientje09-abe/blob-optimizers/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/Pientje0/blob-optimizers/main/install.ps1 | iex
 #
 # Downloads the latest release's portable blob-optimizers.exe into
 # %LOCALAPPDATA%\Programs\Blob Optimizers Portable (no admin needed), verifies its SHA-256
@@ -12,7 +12,7 @@
     $ProgressPreference = 'SilentlyContinue'
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-    $repo = 'Pientje09-abe/blob-optimizers'
+    $repo = 'Pientje0/blob-optimizers'
     $dir = Join-Path $env:LOCALAPPDATA 'Programs\Blob Optimizers Portable'
     $exe = Join-Path $dir 'blob-optimizers.exe'
     $versionFile = Join-Path $dir 'version.txt'

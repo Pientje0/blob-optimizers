@@ -1,10 +1,10 @@
 <#
     Blob Optimizers  -  Windows PC & gaming optimization script
-    https://github.com/Pientje09-abe/blob-optimizers
+    https://github.com/Pientje0/blob-optimizers
 
     Run it (installs nothing, no compiled .exe):
 
-        irm https://raw.githubusercontent.com/Pientje09-abe/blob-optimizers/main/blob.ps1 | iex
+        irm https://raw.githubusercontent.com/Pientje0/blob-optimizers/main/blob.ps1 | iex
 
     Everything this script does is in plain sight below. Each tweak is a short list of
     registry values or service changes, and every change can be reversed from the same menu.
@@ -18,7 +18,7 @@ param(
     [switch]$NonInteractive,       # Load functions/data only; don't show UI or self-elevate
     [switch]$Console,              # Force the text menu instead of the window
     [switch]$SelfTest,             # Build the window without showing it, report, and exit
-    [string]$BlobUrl = 'https://raw.githubusercontent.com/Pientje09-abe/blob-optimizers/main/blob.ps1'
+    [string]$BlobUrl = 'https://raw.githubusercontent.com/Pientje0/blob-optimizers/main/blob.ps1'
 )
 
 $ErrorActionPreference = 'Stop'
