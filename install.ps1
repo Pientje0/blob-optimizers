@@ -67,7 +67,10 @@
 
     Write-Host "  Downloading $tag ($([math]::Round($asset.size / 1MB, 1)) MB)..."
     Invoke-WebRequest -UseBasicParsing -Headers @{ 'User-Agent' = 'BlobOptimizers-Installer' } -Uri $asset.browser_download_url -OutFile $tmp
-    $expected = ((Invoke-WebRequest -UseBasicParsing -Headers @{ 'User-Agent' = 'BlobOptimizers-Installer' } -Uri $sumAsset.browser_download_url).Content -split '\s+')[0].Trim().ToLower()
+    $sumContent = (Invoke-WebRequest -UseBasicParsing -Headers @{ 'User-Agent' = 'BlobOptimizers-Installer' } -Uri $sumAsset.browser_download_url).Content
+    # Windows PowerShell 5.1 returns binary content types as bytes.
+    if ($sumContent -is [byte[]]) { $sumContent = [Text.Encoding]::ASCII.GetString($sumContent) }
+    $expected = ([string]$sumContent).Trim().Split(' ')[0].Trim().ToLower()
     $actual = (Get-FileHash -Algorithm SHA256 -Path $tmp).Hash.ToLower()
     if ($expected -ne $actual) {
         Remove-Item $tmp -Force
